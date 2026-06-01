@@ -244,17 +244,24 @@ def main():
     log.info("=== 뉴스 요약 시작 ===")
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    ko_candidates = fetch_candidates(KOREAN_FEEDS)
-    ko_articles, ko_quota = collect_summaries(ko_candidates, client)
-
+    ko_candidates    = fetch_candidates(KOREAN_FEEDS)
     world_candidates = fetch_candidates(WORLD_FEEDS)
+
+    ko_articles, ko_quota = collect_summaries(ko_candidates, client)
     world_articles, world_quota = collect_summaries(
         world_candidates, client, limit=WORLD_TARGET, skip_api=ko_quota
     )
 
+    if ko_quota or world_quota:
+        log.warning("Gemini API 한도 초과 — 카테고리당 3개로 줄여서 재시도합니다.")
+        ko_articles, ko_quota = collect_summaries(ko_candidates, client, limit=3)
+        world_articles, world_quota = collect_summaries(
+            world_candidates, client, limit=3, skip_api=ko_quota
+        )
+
     quota_exceeded = ko_quota or world_quota
     if quota_exceeded:
-        log.warning("Gemini API 한도 초과 — 일부 또는 전체 기사를 제목만 전송합니다.")
+        log.warning("재시도 후에도 한도 초과 — 제목만 전송합니다.")
 
     if not ko_articles and not world_articles:
         log.error("수집된 뉴스가 없습니다.")
