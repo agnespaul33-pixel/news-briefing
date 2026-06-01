@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *)",
+      "Bash(apt-get install *)",
+      "Bash(pip list *)",
+      "Bash(venv/bin/pip install *)",
+      "Bash(wait)",
+      "Bash(venv/bin/pip list *)",
+      "Bash(venv/bin/python *)",
+      "Bash(venv/bin/python3 *)",
+      "Read(//usr/bin/**)",
+      "Bash(crontab -l)",
+      "Bash(sudo service cron status)",
+      "Bash(sudo service cron start)",
+      "Bash(wslpath -w /mnt/c/Users/태리/my-project)",
+      "Bash(chmod +x *)",
+      "Bash(schtasks.exe *)",
+      "Bash(iconv -f cp949 -t utf-8)",
+      "Bash(pip3 show *)",
+      "Bash(pip show *)",
+      "Bash(export GEMINI_API_KEY=AIzaSyBiDyUSUHoWLwxA5yBGcDg-7jL_JKLxu9k)",
+      "Bash(python saju.py 1990 3 15 10 남)",
+      "Bash(pip install *)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/python saju.py 1990 3 15 10 남)",
+      "Bash(export GEMINI_API_KEY=AIzaSyCaal7foQp0C6DD8cK9LPK8vfbYupDQqYM)",
+      "Bash(/mnt/c/Users/태리/my-project/venv/bin/python *)",
+      "Bash(python saju_simple.py 甲 子 丙 寅 庚 申 辛 巳 남)",
+      "Bash(powershell.exe *)",
+      "Bash(python saju.py)",
+      "Bash(./run_news_summary.sh *)",
+      "Bash(pkill -f \"run_news_summary.sh\")",
+      "Bash(pkill -f \"news_summary.py\")"
+    ]
+  }
+}
