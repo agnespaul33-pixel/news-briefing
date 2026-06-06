@@ -10,7 +10,6 @@ import sys
 import logging
 from datetime import datetime
 
-import time
 import feedparser
 import requests
 from google import genai
@@ -63,11 +62,7 @@ _RSS_HEADERS = {
     )
 }
 
-N_CANDIDATES = 3  # 카테고리당 후보 기사 수 (요약 실패 시 다음 기사로)
-
-
-class QuotaExceededError(Exception):
-    pass
+N_CANDIDATES = 3  # 카테고리당 후보 기사 수
 
 
 # ── 뉴스 수집 ────────────────────────────────────────────────────────────────
@@ -97,78 +92,50 @@ def fetch_candidates(feeds: dict[str, str]) -> dict[str, list[dict]]:
     return candidates
 
 
-# ── Gemini 요약 ───────────────────────────────────────────────────────────────
+# ── Gemini 요약 (1회 배치 호출) ───────────────────────────────────────────────
 
-def _summarize_one(art: dict, client: genai.Client) -> str:
-    """단일 기사 요약. 429 시 retryDelay만큼 대기 후 1회 재시도."""
-    prompt = (
-        "다음 뉴스 기사를 한국어로 2문장으로 핵심만 요약해 주세요.\n"
-        "영문 기사도 반드시 한국어로 요약합니다.\n"
-        "형식: 번호 없이 줄바꿈으로 구분된 정확히 2문장\n\n"
-        f"제목: {art['title']}\n"
-        f"내용: {art['description']}"
-    )
-    for attempt in range(2):  # 최대 1회 재시도
-        try:
-            resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-            summary = (resp.text or "").strip()
-            if not summary:
-                raise ValueError("빈 응답")
-            return summary
-        except Exception as e:
-            err_str = str(e)
-            m = re.search(r"retryDelay.*?'(\d+)s'", err_str)
-            if m and attempt < 1:
-                wait = int(m.group(1)) + 3
-                log.info(f"[{art['category']}] Rate limit — {wait}초 대기 후 재시도")
-                time.sleep(wait)
-                continue
-            if not m and any(k in err_str for k in ("RESOURCE_EXHAUSTED", "quota", "429")):
-                raise QuotaExceededError(str(e))
-            raise
-
-
-def collect_summaries(
-    candidates: dict[str, list[dict]],
-    client: genai.Client,
-    limit: int | None = None,
-    skip_api: bool = False,
-) -> tuple[list[dict], bool]:
-    """카테고리별 후보에서 첫 번째 성공 요약 채택. limit 지정 시 해당 수 달성 후 중단.
-
-    Returns: (articles, quota_exceeded)
-    quota_exceeded=True이면 일부/전체 기사에 summary=None (제목만 전송).
-    """
-    results = []
-    quota_exceeded = skip_api
-
-    for category, articles in candidates.items():
-        if limit and len(results) >= limit:
+def _select_articles(candidates: dict[str, list[dict]], limit: int | None = None) -> list[dict]:
+    """카테고리별 첫 번째 후보 선택 (limit개까지)"""
+    selected = []
+    for articles in candidates.values():
+        if limit and len(selected) >= limit:
             break
-        if not articles:
-            continue
+        if articles:
+            selected.append(articles[0])
+    return selected
 
-        if quota_exceeded:
-            results.append({**articles[0], "summary": None})
-            continue
 
-        for art in articles:
-            try:
-                summary = _summarize_one(art, client)
-                results.append({**art, "summary": summary})
-                log.info(f"[{category}] 요약 완료")
-                break
-            except QuotaExceededError as e:
-                log.warning(f"Gemini API 일일 한도 초과 — 나머지 기사는 제목만 전송: {e}")
-                quota_exceeded = True
-                results.append({**articles[0], "summary": None})
-                break
-            except Exception as e:
-                log.warning(f"[{category}] 기사 건너뜀 → 다음 후보 시도: {e}")
-        else:
-            log.error(f"[{category}] 후보 {len(articles)}개 모두 실패, 카테고리 제외")
+def summarize_batch(articles: list[dict], client: genai.Client) -> list[dict]:
+    """전체 기사를 1회 API 호출로 일괄 요약. 실패 시 summary=None."""
+    if not articles:
+        return []
 
-    return results, quota_exceeded
+    article_lines = []
+    for i, art in enumerate(articles, 1):
+        desc = (art.get("description") or "")[:300]
+        article_lines.append(f"[{i}] [{art['category']}] 제목: {art['title']} / 내용: {desc}")
+
+    prompt = (
+        f"아래 {len(articles)}개 뉴스 기사를 각각 한국어 2문장으로 요약하세요.\n"
+        "영문 기사도 반드시 한국어로 요약합니다.\n"
+        "마크다운 기호(**, ##, -, * 등)는 사용하지 마세요.\n"
+        "응답 형식을 반드시 지키세요 — 각 요약을 번호로 시작, 한 줄에 2문장:\n"
+        "[1] 첫째 문장. 둘째 문장.\n"
+        "[2] 첫째 문장. 둘째 문장.\n\n"
+        "기사 목록:\n" + "\n".join(article_lines)
+    )
+
+    try:
+        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        raw = (resp.text or "").strip()
+        summaries: dict[int, str] = {}
+        for m in re.finditer(r"\[(\d+)\]\s*(.+?)(?=\n\[\d+\]|\Z)", raw, re.DOTALL):
+            summaries[int(m.group(1))] = m.group(2).strip()
+        log.info(f"배치 요약 완료: {len(summaries)}/{len(articles)}개")
+        return [{**art, "summary": summaries.get(i)} for i, art in enumerate(articles, 1)]
+    except Exception as e:
+        log.warning(f"배치 요약 실패 — 제목만 전송: {e}")
+        return [{**art, "summary": None} for art in articles]
 
 
 # ── 메시지 포맷 ───────────────────────────────────────────────────────────────
@@ -282,21 +249,17 @@ def main():
     ko_candidates    = fetch_candidates(KOREAN_FEEDS)
     world_candidates = fetch_candidates(WORLD_FEEDS)
 
-    ko_articles, ko_quota = collect_summaries(ko_candidates, client)
-    world_articles, world_quota = collect_summaries(
-        world_candidates, client, limit=WORLD_TARGET, skip_api=ko_quota
-    )
+    ko_arts    = _select_articles(ko_candidates)
+    world_arts = _select_articles(world_candidates, limit=WORLD_TARGET)
 
-    if ko_quota or world_quota:
-        log.warning("Gemini API 한도 초과 — 카테고리당 3개로 줄여서 재시도합니다.")
-        ko_articles, ko_quota = collect_summaries(ko_candidates, client, limit=3)
-        world_articles, world_quota = collect_summaries(
-            world_candidates, client, limit=3, skip_api=ko_quota
-        )
+    all_arts = summarize_batch(ko_arts + world_arts, client)
+    n_ko = len(ko_arts)
+    ko_articles    = all_arts[:n_ko]
+    world_articles = all_arts[n_ko:]
 
-    quota_exceeded = ko_quota or world_quota
+    quota_exceeded = not any(art.get("summary") for art in all_arts)
     if quota_exceeded:
-        log.warning("재시도 후에도 한도 초과 — 제목만 전송합니다.")
+        log.warning("전체 요약 실패 — 제목만 전송합니다.")
 
     if not ko_articles and not world_articles:
         log.error("수집된 뉴스가 없습니다.")
