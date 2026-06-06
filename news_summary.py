@@ -173,31 +173,65 @@ def collect_summaries(
 
 # ── 메시지 포맷 ───────────────────────────────────────────────────────────────
 
+CATEGORY_EMOJI: dict[str, str] = {
+    "정치":     "🏛",
+    "경제":     "💰",
+    "사회":     "🏙",
+    "세계":     "🌐",
+    "IT과학":   "💻",
+    "Reuters":  "📡",
+    "AP News":  "🗞",
+    "BBC 세계": "🎙",
+    "BBC 경제": "💹",
+    "DW 세계":  "📻",
+    "NPR 세계": "🎧",
+    "Al Jazeera": "📺",
+}
+
+DIVIDER = "─" * 22
+
+
+def _html_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _strip_markdown(text: str) -> str:
+    """Gemini 응답에 섞인 마크다운 기호 제거"""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+    text = re.sub(r"#{1,6}\s*", "", text)
+    text = re.sub(r"^[-*]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    return text.strip()
+
+
+def _article_block(art: dict) -> list[str]:
+    emoji = CATEGORY_EMOJI.get(art["category"], "📌")
+    title = _html_escape(_strip_markdown(art["title"]))
+    link  = art["link"].replace("&", "&amp;")
+    lines = [f'{emoji} <b>[{art["category"]}]</b> {title}']
+    if art.get("summary"):
+        lines.append(_html_escape(_strip_markdown(art["summary"])))
+    lines.append(f'🔗 <a href="{link}">기사 보기</a>')
+    lines.append("")
+    return lines
+
+
 def build_messages(
     ko_articles: list[dict],
     world_articles: list[dict],
     quota_exceeded: bool = False,
 ) -> tuple[str, str]:
     today = datetime.now().strftime("%Y년 %m월 %d일 (%a)")
-    notice = "\n⚠️ Gemini API 한도 초과 — 제목만 전송" if quota_exceeded else ""
+    notice = "\n⚠️ <i>Gemini API 한도 초과 — 제목만 전송</i>" if quota_exceeded else ""
 
-    ko_lines = [f"📰 {today} 주요뉴스{notice}", "", "🇰🇷 국내 뉴스"]
-    for i, art in enumerate(ko_articles, 1):
-        title = art["title"][:34] + "…" if len(art["title"]) > 35 else art["title"]
-        ko_lines.append(f"[{i}/{art['category']}] {title}")
-        if art.get("summary"):
-            ko_lines.append(art["summary"])
-        ko_lines.append(f"🔗 {art['link']}")
-        ko_lines.append("")
+    ko_lines = [f"📰 <b>{today} 주요뉴스</b>{notice}", "", f"🇰🇷 <b>국내 뉴스</b>", DIVIDER]
+    for art in ko_articles:
+        ko_lines.extend(_article_block(art))
 
-    world_lines = ["🌏 세계 정세"]
-    for i, art in enumerate(world_articles, 1):
-        title = art["title"][:34] + "…" if len(art["title"]) > 35 else art["title"]
-        world_lines.append(f"[{i}/{art['category']}] {title}")
-        if art.get("summary"):
-            world_lines.append(art["summary"])
-        world_lines.append(f"🔗 {art['link']}")
-        world_lines.append("")
+    world_lines = [f"🌏 <b>세계 정세</b>", DIVIDER]
+    for art in world_articles:
+        world_lines.extend(_article_block(art))
 
     return "\n".join(ko_lines).rstrip(), "\n".join(world_lines).rstrip()
 
@@ -212,6 +246,7 @@ def send_telegram(text: str) -> bool:
             json={
                 "chat_id": TELEGRAM_CHAT_ID,
                 "text": text,
+                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             },
             timeout=10,
