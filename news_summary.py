@@ -8,9 +8,10 @@ import os
 import re
 import sys
 import logging
-from datetime import datetime
+from datetime import datetime, date
 
 import feedparser
+import holidays
 import requests
 from google import genai
 from dotenv import load_dotenv
@@ -251,6 +252,18 @@ def send_telegram(text: str) -> bool:
 
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 
+def is_skip_day() -> bool:
+    today = date.today()
+    if today.weekday() >= 5:
+        log.info(f"주말({today.strftime('%Y-%m-%d %a')}) — 실행 건너뜀")
+        return True
+    kr_holidays = holidays.country_holidays("KR", years=today.year)
+    if today in kr_holidays:
+        log.info(f"공휴일({today.strftime('%Y-%m-%d')} {kr_holidays[today]}) — 실행 건너뜀")
+        return True
+    return False
+
+
 def validate_env():
     missing = [
         var for var in ("GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
@@ -262,6 +275,8 @@ def validate_env():
 
 
 def main():
+    if is_skip_day():
+        sys.exit(0)
     validate_env()
     log.info("=== 뉴스 요약 시작 ===")
     client = genai.Client(api_key=GEMINI_API_KEY)
