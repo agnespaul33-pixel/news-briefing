@@ -4,11 +4,13 @@
 Reuters RSS는 2020년 폐지됨 → BBC/Al Jazeera/Guardian/DW 대체 사용
 """
 
+import json
 import os
 import re
 import sys
 import logging
 from datetime import datetime, date
+from pathlib import Path
 
 import feedparser
 import holidays
@@ -54,6 +56,18 @@ WORLD_FEEDS: dict[str, str] = {
     "Al Jazeera": "https://www.aljazeera.com/xml/rss/all.xml",
 }
 WORLD_TARGET = 5  # 세계 뉴스 목표 기사 수
+
+# settings.json 의 korean_keywords 로 KOREAN_FEEDS URL 오버라이드 (UI 연동)
+_GNEWS_KO = "https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+_settings_path = Path(__file__).parent / "settings.json"
+if _settings_path.exists():
+    try:
+        _s = json.loads(_settings_path.read_text(encoding="utf-8"))
+        for _cat, _kw in _s.get("korean_keywords", {}).items():
+            if _cat in KOREAN_FEEDS:
+                KOREAN_FEEDS[_cat] = _GNEWS_KO.format(q=_kw.replace(" ", "+"))
+    except Exception:
+        pass
 
 _RSS_HEADERS = {
     "User-Agent": (
