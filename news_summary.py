@@ -106,7 +106,7 @@ def _select_articles(candidates: dict[str, list[dict]], limit: int | None = None
 
 
 def summarize_batch(articles: list[dict], client: genai.Client) -> list[dict]:
-    """전체 기사를 1회 API 호출로 일괄 요약. 실패 시 summary=None."""
+    """전체 기사를 1회 API 호출로 일괄 요약 + 제목 한국어 번역. 실패 시 summary=None."""
     if not articles:
         return []
 
@@ -116,26 +116,45 @@ def summarize_batch(articles: list[dict], client: genai.Client) -> list[dict]:
         article_lines.append(f"[{i}] [{art['category']}] 제목: {art['title']} / 내용: {desc}")
 
     prompt = (
-        f"아래 {len(articles)}개 뉴스 기사를 각각 한국어 2문장으로 요약하세요.\n"
-        "영문 기사도 반드시 한국어로 요약합니다.\n"
+        f"아래 {len(articles)}개 뉴스 기사를 처리하세요.\n"
+        "- 영문 기사: 제목을 한국어로 번역하고, 내용을 한국어 2문장으로 요약\n"
+        "- 한국어 기사: 제목은 그대로 두고, 내용을 2문장으로 요약\n"
         "마크다운 기호(**, ##, -, * 등)는 사용하지 마세요.\n"
-        "응답 형식을 반드시 지키세요 — 각 요약을 번호로 시작, 한 줄에 2문장:\n"
-        "[1] 첫째 문장. 둘째 문장.\n"
-        "[2] 첫째 문장. 둘째 문장.\n\n"
+        "응답 형식을 반드시 지키세요:\n"
+        "[1]\n"
+        "제목: (한국어 제목)\n"
+        "요약: (한국어 2문장)\n"
+        "[2]\n"
+        "제목: (한국어 제목)\n"
+        "요약: (한국어 2문장)\n\n"
         "기사 목록:\n" + "\n".join(article_lines)
     )
 
     try:
         resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         raw = (resp.text or "").strip()
-        summaries: dict[int, str] = {}
-        for m in re.finditer(r"\[(\d+)\]\s*(.+?)(?=\n\[\d+\]|\Z)", raw, re.DOTALL):
-            summaries[int(m.group(1))] = m.group(2).strip()
-        log.info(f"배치 요약 완료: {len(summaries)}/{len(articles)}개")
-        return [{**art, "summary": summaries.get(i)} for i, art in enumerate(articles, 1)]
+
+        results: dict[int, dict] = {}
+        for block in re.split(r"\n(?=\[\d+\])", raw):
+            m_idx = re.match(r"\[(\d+)\]", block)
+            if not m_idx:
+                continue
+            idx = int(m_idx.group(1))
+            m_title   = re.search(r"제목:\s*(.+?)(?=\n요약:|\Z)", block, re.DOTALL)
+            m_summary = re.search(r"요약:\s*(.+?)$", block, re.DOTALL)
+            results[idx] = {
+                "ko_title": m_title.group(1).strip() if m_title else None,
+                "summary":  m_summary.group(1).strip() if m_summary else None,
+            }
+
+        log.info(f"배치 요약 완료: {len(results)}/{len(articles)}개")
+        return [
+            {**art, **results.get(i, {"ko_title": None, "summary": None})}
+            for i, art in enumerate(articles, 1)
+        ]
     except Exception as e:
         log.warning(f"배치 요약 실패 — 제목만 전송: {e}")
-        return [{**art, "summary": None} for art in articles]
+        return [{**art, "ko_title": None, "summary": None} for art in articles]
 
 
 # ── 메시지 포맷 ───────────────────────────────────────────────────────────────
@@ -174,7 +193,8 @@ def _strip_markdown(text: str) -> str:
 
 def _article_block(art: dict) -> list[str]:
     emoji = CATEGORY_EMOJI.get(art["category"], "📌")
-    title = _html_escape(_strip_markdown(art["title"]))
+    raw_title = art.get("ko_title") or art["title"]
+    title = _html_escape(_strip_markdown(raw_title))
     link  = art["link"].replace("&", "&amp;")
     lines = [f'{emoji} <b>[{art["category"]}]</b> {title}']
     if art.get("summary"):
