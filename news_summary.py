@@ -9,7 +9,7 @@ import os
 import re
 import sys
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
 
 import feedparser
@@ -267,7 +267,8 @@ def send_telegram(text: str) -> bool:
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 
 def is_skip_day() -> bool:
-    today = date.today()
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
     if today.weekday() >= 5:
         log.info(f"주말({today.strftime('%Y-%m-%d %a')}) — 실행 건너뜀")
         return True
