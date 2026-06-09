@@ -128,20 +128,17 @@ def summarize_batch(articles: list[dict], client: genai.Client) -> list[dict]:
     article_lines = []
     for i, art in enumerate(articles, 1):
         desc = (art.get("description") or "")[:300]
-        article_lines.append(f"[{i}] [{art['category']}] 제목: {art['title']} / 내용: {desc}")
+        article_lines.append(f"<{i}> [{art['category']}] {art['title']} / {desc}")
 
     prompt = (
-        f"아래 {len(articles)}개 뉴스 기사를 처리하세요.\n"
-        "- 영문 기사: 제목을 한국어로 번역하고, 내용을 한국어 2문장으로 요약\n"
-        "- 한국어 기사: 제목은 그대로 두고, 내용을 2문장으로 요약\n"
-        "마크다운 기호(**, ##, -, * 등)는 사용하지 마세요.\n"
-        "응답 형식을 반드시 지키세요:\n"
-        "[1]\n"
-        "제목: (한국어 제목)\n"
-        "요약: (한국어 2문장)\n"
-        "[2]\n"
-        "제목: (한국어 제목)\n"
-        "요약: (한국어 2문장)\n\n"
+        "모든 출력은 반드시 한국어로 작성합니다. 영어 출력은 절대 허용되지 않습니다.\n\n"
+        f"아래 {len(articles)}개 기사를 처리하세요.\n"
+        "영문 기사: 제목을 한국어로 번역하고 내용을 한국어 2문장으로 요약합니다.\n"
+        "한국어 기사: 제목은 그대로 두고 내용을 한국어 2문장으로 요약합니다.\n"
+        "마크다운 기호(**, ##, -, * 등)는 사용하지 않습니다.\n\n"
+        "출력 형식 (반드시 준수, 한국어로):\n"
+        "[1]\n제목: 한국어 제목\n요약: 한국어 첫 문장. 한국어 둘째 문장.\n"
+        "[2]\n제목: 한국어 제목\n요약: 한국어 첫 문장. 한국어 둘째 문장.\n\n"
         "기사 목록:\n" + "\n".join(article_lines)
     )
 
