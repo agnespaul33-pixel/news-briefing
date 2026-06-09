@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-매일 오전 7시 국내 뉴스 5개 + 세계 뉴스 5개 → Gemini 한국어 요약 → 텔레그램 전송
-Reuters RSS는 2020년 폐지됨 → BBC/Al Jazeera/Guardian/DW 대체 사용
+평일 오전 9시~오후 3시 30분, 30분마다
+경제·주식·부동산·환율·금리 뉴스 → Gemini 한국어 요약 → 텔레그램 전송
 """
 
 import json
@@ -36,36 +36,40 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # ── RSS 피드 ──────────────────────────────────────────────────────────────────
+_GN_KO = "https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+_GN_EN = "https://news.google.com/rss/search?q={q}&hl=en&gl=US&ceid=US:en"
+
 KOREAN_FEEDS: dict[str, str] = {
-    "정치":   "https://news.google.com/rss/search?q=한국+정치&hl=ko&gl=KR&ceid=KR:ko",
-    "경제":   "https://news.google.com/rss/search?q=한국+경제&hl=ko&gl=KR&ceid=KR:ko",
-    "사회":   "https://news.google.com/rss/search?q=한국+사회&hl=ko&gl=KR&ceid=KR:ko",
-    "세계":   "https://news.google.com/rss/search?q=세계+국제&hl=ko&gl=KR&ceid=KR:ko",
-    "IT과학": "https://news.google.com/rss/search?q=IT+과학+기술&hl=ko&gl=KR&ceid=KR:ko",
+    # 주제별
+    "경제":      _GN_KO.format(q="한국+경제+증시"),
+    "주식":      _GN_KO.format(q="코스피+코스닥+주식시장"),
+    "부동산":    _GN_KO.format(q="부동산+아파트+분양"),
+    "환율":      _GN_KO.format(q="원달러+환율+외환시장"),
+    "금리":      _GN_KO.format(q="금리+한국은행+기준금리"),
+    # 언론사별
+    "매일경제":    _GN_KO.format(q="site:mk.co.kr"),
+    "한국경제":    _GN_KO.format(q="site:hankyung.com"),
+    "머니투데이":  _GN_KO.format(q="site:mt.co.kr"),
+    "연합인포맥스": _GN_KO.format(q="site:einfomax.co.kr"),
 }
 
-# Reuters/AP는 공식 RSS 폐지 → Google News RSS 우회 수집
-# 7개 피드 풀에서 최대 5개 성공 기사 채움 (일부 피드 차단 시 자동 보완)
 WORLD_FEEDS: dict[str, str] = {
-    "Reuters":  "https://news.google.com/rss/search?q=site:reuters.com+world&hl=en&gl=US&ceid=US:en",
-    "AP News":  "https://news.google.com/rss/search?q=site:apnews.com&hl=en&gl=US&ceid=US:en",
-    "BBC 세계":  "https://feeds.bbci.co.uk/news/world/rss.xml",
-    "BBC 경제":  "https://feeds.bbci.co.uk/news/business/rss.xml",
-    "DW 세계":   "https://rss.dw.com/rdf/rss-en-world",
-    "NPR 세계":  "https://feeds.npr.org/1004/rss.xml",
-    "Al Jazeera": "https://www.aljazeera.com/xml/rss/all.xml",
+    "Reuters 경제": _GN_EN.format(q="site:reuters.com+economy+finance"),
+    "Reuters 시장": _GN_EN.format(q="site:reuters.com+markets+stocks"),
+    "Bloomberg":    _GN_EN.format(q="site:bloomberg.com+economy"),
+    "FT":           _GN_EN.format(q="site:ft.com+economy"),
+    "WSJ":          _GN_EN.format(q="site:wsj.com+economy"),
 }
-WORLD_TARGET = 5  # 세계 뉴스 목표 기사 수
+WORLD_TARGET = 5
 
 # settings.json 의 korean_keywords 로 KOREAN_FEEDS URL 오버라이드 (UI 연동)
-_GNEWS_KO = "https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
 _settings_path = Path(__file__).parent / "settings.json"
 if _settings_path.exists():
     try:
         _s = json.loads(_settings_path.read_text(encoding="utf-8"))
         for _cat, _kw in _s.get("korean_keywords", {}).items():
             if _cat in KOREAN_FEEDS:
-                KOREAN_FEEDS[_cat] = _GNEWS_KO.format(q=_kw.replace(" ", "+"))
+                KOREAN_FEEDS[_cat] = _GN_KO.format(q=_kw.replace(" ", "+"))
     except Exception:
         pass
 
@@ -172,18 +176,23 @@ def summarize_batch(articles: list[dict], client: genai.Client) -> list[dict]:
 # ── 메시지 포맷 ───────────────────────────────────────────────────────────────
 
 CATEGORY_EMOJI: dict[str, str] = {
-    "정치":     "🏛",
-    "경제":     "💰",
-    "사회":     "🏙",
-    "세계":     "🌐",
-    "IT과학":   "💻",
-    "Reuters":  "📡",
-    "AP News":  "🗞",
-    "BBC 세계": "🎙",
-    "BBC 경제": "💹",
-    "DW 세계":  "📻",
-    "NPR 세계": "🎧",
-    "Al Jazeera": "📺",
+    # 국내 주제
+    "경제":      "💰",
+    "주식":      "📈",
+    "부동산":    "🏠",
+    "환율":      "💱",
+    "금리":      "🏦",
+    # 국내 언론사
+    "매일경제":    "📰",
+    "한국경제":    "📊",
+    "머니투데이":  "💹",
+    "연합인포맥스": "🔵",
+    # 해외
+    "Reuters 경제": "🌐",
+    "Reuters 시장": "📉",
+    "Bloomberg":   "💼",
+    "FT":          "🗞",
+    "WSJ":         "🗽",
 }
 
 DIVIDER = "─" * 22
@@ -221,14 +230,17 @@ def build_messages(
     world_articles: list[dict],
     quota_exceeded: bool = False,
 ) -> tuple[str, str]:
-    today = datetime.now().strftime("%Y년 %m월 %d일 (%a)")
+    KST = timezone(timedelta(hours=9))
+    now_kst = datetime.now(KST)
+    today    = now_kst.strftime("%Y년 %m월 %d일 (%a)")
+    time_str = now_kst.strftime("%H:%M")
     notice = "\n⚠️ <i>Gemini API 한도 초과 — 제목만 전송</i>" if quota_exceeded else ""
 
-    ko_lines = [f"📰 <b>{today} 주요뉴스</b>{notice}", "", f"🇰🇷 <b>국내 뉴스</b>", DIVIDER]
+    ko_lines = [f"📈 <b>{today} {time_str} 경제 브리핑</b>{notice}", "", f"🇰🇷 <b>국내 경제</b>", DIVIDER]
     for art in ko_articles:
         ko_lines.extend(_article_block(art))
 
-    world_lines = [f"🌏 <b>세계 정세</b>", DIVIDER]
+    world_lines = [f"🌍 <b>해외 경제</b>", DIVIDER]
     for art in world_articles:
         world_lines.extend(_article_block(art))
 
@@ -276,6 +288,17 @@ def is_skip_day() -> bool:
     return False
 
 
+def is_skip_time() -> bool:
+    """KST 09:00~15:30 범위 외이면 건너뜀 (GitHub Actions 지연 대응)"""
+    KST = timezone(timedelta(hours=9))
+    now = datetime.now(KST)
+    hm  = (now.hour, now.minute)
+    if hm < (9, 0) or hm > (15, 30):
+        log.info(f"거래 시간 외({now.strftime('%H:%M')} KST) — 실행 건너뜀")
+        return True
+    return False
+
+
 def validate_env():
     missing = [
         var for var in ("GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
@@ -287,7 +310,7 @@ def validate_env():
 
 
 def main():
-    if is_skip_day():
+    if is_skip_day() or is_skip_time():
         sys.exit(0)
     validate_env()
     log.info("=== 뉴스 요약 시작 ===")

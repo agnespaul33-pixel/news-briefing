@@ -10,11 +10,15 @@ SETTINGS_FILE = Path(__file__).parent / "settings.json"
 SCRIPT_FILE   = Path(__file__).parent / "news_summary.py"
 
 DEFAULT_KO_KEYWORDS: dict[str, str] = {
-    "정치":   "한국 정치",
-    "경제":   "한국 경제",
-    "사회":   "한국 사회",
-    "세계":   "세계 국제",
-    "IT과학": "IT 과학 기술",
+    "경제":      "한국 경제 증시",
+    "주식":      "코스피 코스닥 주식시장",
+    "부동산":    "부동산 아파트 분양",
+    "환율":      "원달러 환율 외환시장",
+    "금리":      "금리 한국은행 기준금리",
+    "매일경제":    "site:mk.co.kr",
+    "한국경제":    "site:hankyung.com",
+    "머니투데이":  "site:mt.co.kr",
+    "연합인포맥스": "site:einfomax.co.kr",
 }
 
 
