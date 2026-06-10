@@ -1,2 +1,6 @@
 .env
 saju-tool/.env
+venv/
+__pycache__/
+*.log
+settings.json
