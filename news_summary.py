@@ -34,6 +34,8 @@ log = logging.getLogger(__name__)
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "")
+NOTION_TOKEN      = os.environ.get("NOTION_TOKEN", "")
+NOTION_PAGE_ID    = os.environ.get("NOTION_PAGE_ID", "").strip()
 
 # ── RSS 피드 ──────────────────────────────────────────────────────────────────
 _GN_KO = "https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
@@ -247,6 +249,99 @@ def build_messages(
     return "\n".join(ko_lines).rstrip(), "\n".join(world_lines).rstrip()
 
 
+# ── 노션 저장 ────────────────────────────────────────────────────────────────
+
+_NOTION_API = "https://api.notion.com/v1"
+_NOTION_VER = "2022-06-28"
+
+
+def _notion_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": _NOTION_VER,
+    }
+
+
+def _nt(content: str) -> dict:
+    """plain text rich_text element (최대 2000자)"""
+    return {"type": "text", "text": {"content": content[:2000]}}
+
+
+def _nt_link(label: str, url: str) -> dict:
+    return {"type": "text", "text": {"content": label, "link": {"url": url}}}
+
+
+def _notion_article_blocks(art: dict) -> list[dict]:
+    emoji = CATEGORY_EMOJI.get(art["category"], "📌")
+    title = _strip_markdown(art.get("ko_title") or art["title"])
+    blocks: list[dict] = [
+        {
+            "object": "block", "type": "heading_3",
+            "heading_3": {"rich_text": [_nt(f"{emoji} [{art['category']}] {title}")]},
+        }
+    ]
+    if art.get("summary"):
+        blocks.append({
+            "object": "block", "type": "paragraph",
+            "paragraph": {"rich_text": [_nt(_strip_markdown(art["summary"]))]},
+        })
+    if art.get("link"):
+        blocks.append({
+            "object": "block", "type": "paragraph",
+            "paragraph": {"rich_text": [_nt_link("🔗 기사 보기", art["link"])]},
+        })
+    return blocks
+
+
+def save_to_notion(ko_articles: list[dict], world_articles: list[dict]) -> bool:
+    if not NOTION_TOKEN or not NOTION_PAGE_ID:
+        log.info("Notion 환경변수 미설정 — 건너뜀")
+        return False
+
+    KST = timezone(timedelta(hours=9))
+    page_title = datetime.now(KST).strftime("%Y년 %m월 %d일 %H:%M 경제 브리핑")
+
+    children: list[dict] = [
+        {"object": "block", "type": "heading_2",
+         "heading_2": {"rich_text": [_nt("🇰🇷 국내 경제")]}},
+        {"object": "block", "type": "divider", "divider": {}},
+    ]
+    for art in ko_articles:
+        children.extend(_notion_article_blocks(art))
+
+    children += [
+        {"object": "block", "type": "divider", "divider": {}},
+        {"object": "block", "type": "heading_2",
+         "heading_2": {"rich_text": [_nt("🌍 해외 경제")]}},
+        {"object": "block", "type": "divider", "divider": {}},
+    ]
+    for art in world_articles:
+        children.extend(_notion_article_blocks(art))
+
+    payload = {
+        "parent": {"page_id": NOTION_PAGE_ID},
+        "properties": {"title": {"title": [_nt(page_title)]}},
+        "children": children,
+    }
+
+    try:
+        resp = requests.post(
+            f"{_NOTION_API}/pages",
+            headers=_notion_headers(),
+            json=payload,
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            log.info(f"Notion 저장 완료: {page_title}")
+            return True
+        log.error(f"Notion 저장 실패: {resp.status_code} {resp.text[:300]}")
+        return False
+    except Exception as e:
+        log.error(f"Notion 저장 오류: {e}")
+        return False
+
+
 # ── 텔레그램 전송 ─────────────────────────────────────────────────────────────
 
 def send_telegram(text: str) -> bool:
@@ -342,6 +437,9 @@ def main():
     ok2 = send_telegram(world_message)
     if ok1 and ok2:
         log.info("텔레그램 전송 성공")
+
+    save_to_notion(ko_articles, world_articles)
+
     sys.exit(0 if (ok1 and ok2) else 1)
 
 
