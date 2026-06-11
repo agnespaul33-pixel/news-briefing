@@ -16,6 +16,7 @@ import feedparser
 import holidays
 import requests
 from google import genai
+from notion_client import Client as NotionClient
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -251,20 +252,7 @@ def build_messages(
 
 # ── 노션 저장 ────────────────────────────────────────────────────────────────
 
-_NOTION_API = "https://api.notion.com/v1"
-_NOTION_VER = "2022-06-28"
-
-
-def _notion_headers() -> dict:
-    return {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Content-Type": "application/json",
-        "Notion-Version": _NOTION_VER,
-    }
-
-
 def _nt(content: str) -> dict:
-    """plain text rich_text element (최대 2000자)"""
     return {"type": "text", "text": {"content": content[:2000]}}
 
 
@@ -319,26 +307,17 @@ def save_to_notion(ko_articles: list[dict], world_articles: list[dict]) -> bool:
     for art in world_articles:
         children.extend(_notion_article_blocks(art))
 
-    payload = {
-        "parent": {"page_id": NOTION_PAGE_ID},
-        "properties": {"title": {"title": [_nt(page_title)]}},
-        "children": children,
-    }
-
     try:
-        resp = requests.post(
-            f"{_NOTION_API}/pages",
-            headers=_notion_headers(),
-            json=payload,
-            timeout=15,
+        notion = NotionClient(auth=NOTION_TOKEN)
+        notion.pages.create(
+            parent={"page_id": NOTION_PAGE_ID},
+            properties={"title": {"title": [_nt(page_title)]}},
+            children=children,
         )
-        if resp.status_code == 200:
-            log.info(f"Notion 저장 완료: {page_title}")
-            return True
-        log.error(f"Notion 저장 실패: {resp.status_code} {resp.text[:300]}")
-        return False
+        log.info(f"Notion 저장 완료: {page_title}")
+        return True
     except Exception as e:
-        log.error(f"Notion 저장 오류: {e}")
+        log.error(f"Notion 저장 실패: {e}")
         return False
 
 
