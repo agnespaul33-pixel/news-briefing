@@ -2,7 +2,8 @@ name: Daily News Summary
 
 on:
   schedule:
-    - cron: '0,30 0-6 * * 1-5'  # KST 09:00~15:30 30분마다 (UTC 00:00~06:30, 월~금)
+    - cron: '0 22 * * *'         # KST 07:00 아침 브리핑 (UTC 22:00 전날, 매일)
+    - cron: '0,30 0-6 * * *'    # KST 09:00~15:30 30분마다 (UTC 00:00~06:30, 매일)
   workflow_dispatch:
 
 jobs:

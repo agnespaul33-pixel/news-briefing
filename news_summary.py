@@ -13,7 +13,6 @@ from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
 
 import feedparser
-import holidays
 import requests
 from google import genai
 from notion_client import Client as NotionClient
@@ -349,26 +348,15 @@ def send_telegram(text: str) -> bool:
 
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 
-def is_skip_day() -> bool:
-    KST = timezone(timedelta(hours=9))
-    today = datetime.now(KST).date()
-    if today.weekday() >= 5:
-        log.info(f"주말({today.strftime('%Y-%m-%d %a')}) — 실행 건너뜀")
-        return True
-    kr_holidays = holidays.country_holidays("KR", years=today.year)
-    if today in kr_holidays:
-        log.info(f"공휴일({today.strftime('%Y-%m-%d')} {kr_holidays[today]}) — 실행 건너뜀")
-        return True
-    return False
-
-
 def is_skip_time() -> bool:
-    """KST 09:00~15:30 범위 외이면 건너뜀 (GitHub Actions 지연 대응)"""
+    """KST 07:00~07:30 또는 09:00~15:30 범위 외이면 건너뜀 (GitHub Actions 지연 대응)"""
     KST = timezone(timedelta(hours=9))
     now = datetime.now(KST)
     hm  = (now.hour, now.minute)
-    if hm < (9, 0) or hm > (15, 30):
-        log.info(f"거래 시간 외({now.strftime('%H:%M')} KST) — 실행 건너뜀")
+    morning = (7, 0) <= hm <= (7, 30)
+    trading = (9, 0) <= hm <= (15, 30)
+    if not (morning or trading):
+        log.info(f"전송 시간 외({now.strftime('%H:%M')} KST) — 실행 건너뜀")
         return True
     return False
 
@@ -384,7 +372,7 @@ def validate_env():
 
 
 def main():
-    if is_skip_day() or is_skip_time():
+    if is_skip_time():
         sys.exit(0)
     validate_env()
     log.info("=== 뉴스 요약 시작 ===")
