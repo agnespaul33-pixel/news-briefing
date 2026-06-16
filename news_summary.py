@@ -348,19 +348,6 @@ def send_telegram(text: str) -> bool:
 
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 
-def is_skip_time() -> bool:
-    """KST 07:00~07:30 또는 15:00~15:30 범위 외이면 건너뜀 (GitHub Actions 지연 대응)"""
-    KST = timezone(timedelta(hours=9))
-    now = datetime.now(KST)
-    hm  = (now.hour, now.minute)
-    morning   = (7, 0) <= hm <= (7, 30)
-    afternoon = (15, 0) <= hm <= (15, 30)
-    if not (morning or afternoon):
-        log.info(f"전송 시간 외({now.strftime('%H:%M')} KST) — 실행 건너뜀")
-        return True
-    return False
-
-
 def validate_env():
     missing = [
         var for var in ("GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
@@ -372,8 +359,6 @@ def validate_env():
 
 
 def main():
-    if is_skip_time():
-        sys.exit(0)
     validate_env()
     log.info("=== 뉴스 요약 시작 ===")
     client = genai.Client(api_key=GEMINI_API_KEY)
