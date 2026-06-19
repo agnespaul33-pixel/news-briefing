@@ -22,7 +22,7 @@ TELEGRAM_BOT_TOKEN  = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
 GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "")
 NOTION_TOKEN        = os.environ.get("NOTION_TOKEN", "")
-NOTION_FRIDGE_DB_ID = os.environ.get("NOTION_FRIDGE_DB_ID", "")
+NOTION_FRIDGE_DB_ID = os.environ.get("NOTION_FRIDGE_DB_ID", "7200e83a-86f9-4844-965b-ac16c55085ae")
 GH_TOKEN            = os.environ.get("GH_TOKEN", "")
 GH_REPO             = os.environ.get("GITHUB_REPOSITORY", "agnespaul33-pixel/news-briefing")
 

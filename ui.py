@@ -151,7 +151,7 @@ with tab_fridge:
     st.title("🧊 냉장고 재고")
     st.caption("텔레그램으로 말하면 5분 이내 자동 반영돼요. 여기서 직접 추가·사용 처리도 가능해요.")
 
-    FRIDGE_DB_ID = os.environ.get("NOTION_FRIDGE_DB_ID", "")
+    FRIDGE_DB_ID = os.environ.get("NOTION_FRIDGE_DB_ID", "7200e83a-86f9-4844-965b-ac16c55085ae")
     NOTION_TK    = os.environ.get("NOTION_TOKEN", "")
 
     if not FRIDGE_DB_ID or not NOTION_TK:
