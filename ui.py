@@ -1,14 +1,31 @@
-import json
-import subprocess
-import sys
-from datetime import date
+import os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import json
 
 import streamlit as st
 
-SETTINGS_FILE = Path(__file__).parent / "settings.json"
-SCRIPT_FILE   = Path(__file__).parent / "news_summary.py"
+st.set_page_config(
+    page_title="경제 뉴스 브리핑",
+    page_icon="📈",
+    layout="wide",
+)
 
+_missing = [v for v in ("GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(v)]
+if _missing:
+    st.error(f"환경변수 누락: {', '.join(_missing)}")
+    st.stop()
+
+from news_summary import (
+    fetch_candidates, _select_articles, summarize_batch,
+    build_messages, send_telegram, save_to_notion,
+    KOREAN_FEEDS, WORLD_FEEDS, WORLD_TARGET, CATEGORY_EMOJI,
+    _strip_markdown, GEMINI_API_KEY,
+)
+from google import genai
+
+KST = timezone(timedelta(hours=9))
+SETTINGS_FILE = Path(__file__).parent / "settings.json"
 DEFAULT_KO_KEYWORDS: dict[str, str] = {
     "경제":      "한국 경제 증시",
     "주식":      "코스피 코스닥 주식시장",
@@ -21,99 +38,113 @@ DEFAULT_KO_KEYWORDS: dict[str, str] = {
     "연합인포맥스": "site:einfomax.co.kr",
 }
 
+if "data" not in st.session_state:
+    st.session_state.data = None
 
-def load_settings() -> dict:
+
+# ── 사이드바: 키워드 설정 ──────────────────────────────────────────────────────
+with st.sidebar:
+    st.header("⚙ 카테고리 키워드")
+    st.caption("저장 후 다음 실행부터 적용")
+
+    settings = {}
     if SETTINGS_FILE.exists():
         try:
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"korean_keywords": DEFAULT_KO_KEYWORDS.copy()}
-
-
-def save_settings(settings: dict) -> None:
-    SETTINGS_FILE.write_text(
-        json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-
-# ── 페이지 설정 ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="뉴스 브리핑", page_icon="📰", layout="centered")
-st.title("📰 뉴스 브리핑")
-
-# ── session_state 초기화 ─────────────────────────────────────────────────────
-if "running" not in st.session_state:
-    st.session_state.running = False
-if "run_result" not in st.session_state:
-    st.session_state.run_result = None
-
-settings = load_settings()
-tab_run, tab_settings = st.tabs(["▶ 수동 실행", "⚙ 카테고리 설정"])
-
-# ── 수동 실행 탭 ─────────────────────────────────────────────────────────────
-with tab_run:
-    today = date.today()
-    weekday_ko = ["월", "화", "수", "목", "금", "토", "일"][today.weekday()]
-    st.caption(f"오늘: {today.strftime('%Y년 %m월 %d일')} ({weekday_ko}요일)")
-    st.write("")
-
-    clicked = st.button(
-        "지금 실행",
-        disabled=st.session_state.running,
-        type="primary",
-        use_container_width=True,
-        key="run_btn",
-    )
-
-    if clicked:
-        st.session_state.running = True
-        st.session_state.run_result = None
-        with st.spinner("뉴스 수집 및 텔레그램 전송 중... (수 분 소요)"):
-            proc = subprocess.run(
-                [sys.executable, str(SCRIPT_FILE)],
-                capture_output=True,
-                text=True,
-                cwd=str(SCRIPT_FILE.parent),
-            )
-        st.session_state.running = False
-        st.session_state.run_result = {
-            "returncode": proc.returncode,
-            "output": (proc.stdout + proc.stderr).strip(),
-        }
-        st.rerun()
-
-    result = st.session_state.run_result
-    if result is not None:
-        if result["returncode"] == 0:
-            st.success("텔레그램 전송 완료!")
-        else:
-            st.error(f"실행 실패 (exit code {result['returncode']})")
-        with st.expander("실행 로그 보기", expanded=result["returncode"] != 0):
-            st.code(result["output"], language="text")
-
-# ── 카테고리 설정 탭 ─────────────────────────────────────────────────────────
-with tab_settings:
-    st.subheader("국내 뉴스 카테고리 키워드")
-    st.caption("Google 뉴스 검색에 사용되는 키워드입니다. 저장 후 다음 실행부터 적용됩니다.")
-    st.divider()
-
     saved_kw = settings.get("korean_keywords", DEFAULT_KO_KEYWORDS.copy())
+
     new_kw: dict[str, str] = {}
-
     for cat, default_val in DEFAULT_KO_KEYWORDS.items():
-        col_label, col_input = st.columns([1, 3])
-        with col_label:
-            st.write(f"**{cat}**")
-        with col_input:
-            new_kw[cat] = st.text_input(
-                label=cat,
-                value=saved_kw.get(cat, default_val),
-                key=f"kw_{cat}",
-                label_visibility="collapsed",
-            )
+        new_kw[cat] = st.text_input(cat, value=saved_kw.get(cat, default_val), key=f"kw_{cat}")
 
-    st.divider()
-    if st.button("저장", type="primary", key="save_btn"):
+    if st.button("저장", type="secondary", use_container_width=True):
         settings["korean_keywords"] = new_kw
-        save_settings(settings)
-        st.success("저장되었습니다. 다음 실행부터 새 키워드가 적용됩니다.")
+        SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        st.success("저장됐습니다")
+
+
+# ── 헤더 ──────────────────────────────────────────────────────────────────────
+col_title, col_btn = st.columns([5, 1])
+with col_title:
+    st.title("📈 경제 뉴스 브리핑")
+    now_str = datetime.now(KST).strftime("%Y년 %m월 %d일 %H:%M KST")
+    if st.session_state.data:
+        st.caption(f"업데이트: {st.session_state.data['fetched_at']}  ·  현재: {now_str}")
+    else:
+        st.caption(now_str)
+with col_btn:
+    st.write("")
+    st.write("")
+    run_clicked = st.button("🔄 새로고침", type="primary", use_container_width=True)
+
+st.divider()
+
+
+# ── 실행 ──────────────────────────────────────────────────────────────────────
+if run_clicked:
+    with st.status("뉴스 불러오는 중...", expanded=True) as status:
+        st.write("📡 RSS 피드 수집 중...")
+        ko_cand = fetch_candidates(KOREAN_FEEDS)
+        world_cand = fetch_candidates(WORLD_FEEDS)
+
+        st.write("🤖 Gemini 요약 중...")
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        ko_arts = _select_articles(ko_cand)
+        world_arts = _select_articles(world_cand, limit=WORLD_TARGET)
+        all_arts = summarize_batch(ko_arts + world_arts, client)
+        n_ko = len(ko_arts)
+        ko_articles = all_arts[:n_ko]
+        world_articles = all_arts[n_ko:]
+
+        st.write("📨 텔레그램 전송 중...")
+        ko_msg, world_msg = build_messages(ko_articles, world_articles)
+        t_ok = send_telegram(ko_msg) and send_telegram(world_msg)
+
+        st.write("📝 Notion 저장 중...")
+        save_to_notion(ko_articles, world_articles)
+
+        status.update(label="✅ 완료!", state="complete")
+
+    st.session_state.data = {
+        "ko": ko_articles,
+        "world": world_articles,
+        "fetched_at": datetime.now(KST).strftime("%Y년 %m월 %d일 %H:%M"),
+        "telegram_ok": t_ok,
+    }
+    st.rerun()
+
+
+# ── 뉴스 카드 ─────────────────────────────────────────────────────────────────
+def render_article(art: dict):
+    emoji = CATEGORY_EMOJI.get(art["category"], "📌")
+    title = _strip_markdown(art.get("ko_title") or art["title"])
+    summary = art.get("summary")
+    link = art.get("link", "")
+
+    with st.container(border=True):
+        st.markdown(f"**{emoji} {art['category']}**")
+        st.markdown(f"**{title}**")
+        if summary:
+            st.write(_strip_markdown(summary))
+        if link:
+            st.link_button("기사 보기 →", link, use_container_width=True)
+
+
+if st.session_state.data:
+    d = st.session_state.data
+    if d["telegram_ok"]:
+        st.success("텔레그램 전송 완료")
+
+    col_ko, col_world = st.columns(2)
+    with col_ko:
+        st.subheader("🇰🇷 국내 경제")
+        for art in d["ko"]:
+            render_article(art)
+    with col_world:
+        st.subheader("🌍 해외 경제")
+        for art in d["world"]:
+            render_article(art)
+else:
+    st.info("🔄 새로고침 버튼을 눌러 최신 뉴스를 가져오세요.")
