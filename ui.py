@@ -20,7 +20,7 @@ from news_summary import (
     fetch_candidates, _select_articles, summarize_batch,
     build_messages, send_telegram, save_to_notion,
     KOREAN_FEEDS, WORLD_FEEDS, WORLD_TARGET, CATEGORY_EMOJI,
-    _strip_markdown, GEMINI_API_KEY,
+    _strip_markdown, GEMINI_API_KEY, NOTION_TOKEN,
 )
 from fridge_bot import get_all, upsert, consume
 from google import genai
@@ -152,12 +152,11 @@ with tab_fridge:
     st.caption("텔레그램으로 말하면 5분 이내 자동 반영돼요. 여기서 직접 추가·사용 처리도 가능해요.")
 
     FRIDGE_DB_ID = os.environ.get("NOTION_FRIDGE_DB_ID", "7200e83a-86f9-4844-965b-ac16c55085ae")
-    NOTION_TK    = os.environ.get("NOTION_TOKEN", "")
 
-    if not FRIDGE_DB_ID or not NOTION_TK:
-        st.warning("NOTION_FRIDGE_DB_ID 또는 NOTION_TOKEN 환경변수가 없어요.")
+    if not NOTION_TOKEN:
+        st.warning("NOTION_TOKEN 환경변수가 없어요.")
     else:
-        notion_f  = NotionClient(auth=NOTION_TK)
+        notion_f  = NotionClient(auth=NOTION_TOKEN)
         inventory = get_all(notion_f)
 
         if inventory:
