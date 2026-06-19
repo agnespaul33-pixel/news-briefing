@@ -152,9 +152,21 @@ with tab_fridge:
     st.caption("텔레그램으로 말하면 5분 이내 자동 반영돼요. 여기서 직접 추가·사용 처리도 가능해요.")
 
     FRIDGE_DB_ID  = "7200e83a-86f9-4844-965b-ac16c55085ae"
+
+    # 진단: 어디에서 토큰을 찾는지 확인
+    _src1 = "있음" if NOTION_TOKEN else "없음"
+    try:
+        _src2 = "있음" if st.secrets.get("NOTION_TOKEN") else "없음"
+        _keys = list(st.secrets.keys())
+    except Exception as _e:
+        _src2 = f"오류({_e})"
+        _keys = []
+    _src3 = "있음" if os.environ.get("NOTION_TOKEN") else "없음"
+    st.info(f"🔍 진단 — news_summary: {_src1} / st.secrets: {_src2} / os.environ: {_src3}\nst.secrets 키 목록: {_keys}")
+
     _notion_token = (
         NOTION_TOKEN
-        or st.secrets.get("NOTION_TOKEN", "")
+        or (st.secrets.get("NOTION_TOKEN") or "")
         or os.environ.get("NOTION_TOKEN", "")
     )
 
