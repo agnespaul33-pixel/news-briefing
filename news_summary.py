@@ -281,39 +281,54 @@ def _notion_article_blocks(art: dict) -> list[dict]:
     return blocks
 
 
+def _get_or_create_daily_page(notion: NotionClient, today_title: str) -> str:
+    """오늘 날짜 페이지가 있으면 ID 반환, 없으면 새로 생성."""
+    results = notion.blocks.children.list(block_id=NOTION_PAGE_ID, page_size=50)
+    for block in results.get("results", []):
+        if block["type"] == "child_page" and block["child_page"]["title"] == today_title:
+            return block["id"]
+    page = notion.pages.create(
+        parent={"page_id": NOTION_PAGE_ID},
+        properties={"title": {"title": [_nt(today_title)]}},
+        children=[],
+    )
+    return page["id"]
+
+
 def save_to_notion(ko_articles: list[dict], world_articles: list[dict]) -> bool:
     if not NOTION_TOKEN or not NOTION_PAGE_ID:
         log.info("Notion 환경변수 미설정 — 건너뜀")
         return False
 
     KST = timezone(timedelta(hours=9))
-    page_title = datetime.now(KST).strftime("%Y년 %m월 %d일 %H:%M 경제 브리핑")
+    now_kst = datetime.now(KST)
+    today_title = now_kst.strftime("%Y년 %m월 %d일 경제 브리핑")
+    time_str = now_kst.strftime("%H:%M")
 
-    children: list[dict] = [
+    blocks: list[dict] = [
         {"object": "block", "type": "heading_2",
-         "heading_2": {"rich_text": [_nt("🇰🇷 국내 경제")]}},
+         "heading_2": {"rich_text": [_nt(f"📌 {time_str} 브리핑")]}},
+        {"object": "block", "type": "heading_3",
+         "heading_3": {"rich_text": [_nt("🇰🇷 국내 경제")]}},
         {"object": "block", "type": "divider", "divider": {}},
     ]
     for art in ko_articles:
-        children.extend(_notion_article_blocks(art))
+        blocks.extend(_notion_article_blocks(art))
 
-    children += [
+    blocks += [
         {"object": "block", "type": "divider", "divider": {}},
-        {"object": "block", "type": "heading_2",
-         "heading_2": {"rich_text": [_nt("🌍 해외 경제")]}},
+        {"object": "block", "type": "heading_3",
+         "heading_3": {"rich_text": [_nt("🌍 해외 경제")]}},
         {"object": "block", "type": "divider", "divider": {}},
     ]
     for art in world_articles:
-        children.extend(_notion_article_blocks(art))
+        blocks.extend(_notion_article_blocks(art))
 
     try:
         notion = NotionClient(auth=NOTION_TOKEN)
-        notion.pages.create(
-            parent={"page_id": NOTION_PAGE_ID},
-            properties={"title": {"title": [_nt(page_title)]}},
-            children=children,
-        )
-        log.info(f"Notion 저장 완료: {page_title}")
+        daily_page_id = _get_or_create_daily_page(notion, today_title)
+        notion.blocks.children.append(block_id=daily_page_id, children=blocks)
+        log.info(f"Notion 저장 완료: {today_title} ({time_str})")
         return True
     except Exception as e:
         log.error(f"Notion 저장 실패: {e}")
