@@ -151,12 +151,17 @@ with tab_fridge:
     st.title("🧊 냉장고 재고")
     st.caption("텔레그램으로 말하면 5분 이내 자동 반영돼요. 여기서 직접 추가·사용 처리도 가능해요.")
 
-    FRIDGE_DB_ID = os.environ.get("NOTION_FRIDGE_DB_ID", "7200e83a-86f9-4844-965b-ac16c55085ae")
+    FRIDGE_DB_ID  = "7200e83a-86f9-4844-965b-ac16c55085ae"
+    _notion_token = (
+        NOTION_TOKEN
+        or st.secrets.get("NOTION_TOKEN", "")
+        or os.environ.get("NOTION_TOKEN", "")
+    )
 
-    if not NOTION_TOKEN:
-        st.warning("NOTION_TOKEN 환경변수가 없어요.")
+    if not _notion_token:
+        st.warning("NOTION_TOKEN이 설정되지 않았어요.")
     else:
-        notion_f  = NotionClient(auth=NOTION_TOKEN)
+        notion_f  = NotionClient(auth=_notion_token)
         inventory = get_all(notion_f)
 
         if inventory:
