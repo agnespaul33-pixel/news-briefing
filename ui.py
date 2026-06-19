@@ -161,8 +161,12 @@ with tab_fridge:
     if not _notion_token:
         st.warning("NOTION_TOKEN이 설정되지 않았어요.")
     else:
-        notion_f  = NotionClient(auth=_notion_token)
-        inventory = get_all(notion_f)
+        try:
+            notion_f  = NotionClient(auth=_notion_token)
+            inventory = get_all(notion_f)
+        except Exception as _e:
+            st.error(f"Notion 연결 오류: {_e}")
+            st.stop()
 
         if inventory:
             by_cat: dict[str, list] = {}
