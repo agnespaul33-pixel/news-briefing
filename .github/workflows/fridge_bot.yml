@@ -1,0 +1,30 @@
+name: Fridge Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # 5분마다 실행
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+      TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+      NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
+      NOTION_FRIDGE_DB_ID: ${{ secrets.NOTION_FRIDGE_DB_ID }}
+      GH_TOKEN:            ${{ secrets.GH_TOKEN }}
+      TELEGRAM_OFFSET:     ${{ vars.TELEGRAM_OFFSET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - run: python fridge_bot.py --batch

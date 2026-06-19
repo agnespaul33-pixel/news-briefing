@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 냉장고/반찬 관리 텔레그램 봇
-자연어로 재료·반찬 추가, 사용, 조회, 메뉴 추천
+--batch : GitHub Actions용 1회 실행 모드 (메시지 처리 후 종료)
+없으면  : 로컬 개발용 폴링 모드
 """
 
 import json
 import logging
 import os
+import sys
 import time
 
 import requests
@@ -21,26 +23,42 @@ TELEGRAM_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
 GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "")
 NOTION_TOKEN        = os.environ.get("NOTION_TOKEN", "")
 NOTION_FRIDGE_DB_ID = os.environ.get("NOTION_FRIDGE_DB_ID", "")
+GH_TOKEN            = os.environ.get("GH_TOKEN", "")
+GH_REPO             = os.environ.get("GITHUB_REPOSITORY", "agnespaul33-pixel/news-briefing")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
 HELP_TEXT = (
     "🤖 <b>냉장고 봇 사용법</b>\n\n"
-    "➕ <b>추가</b>\n"
-    "  달걀 10개 샀어\n"
-    "  된장찌개 4인분 만들었어\n\n"
-    "➖ <b>사용</b>\n"
-    "  달걀 2개 썼어\n"
-    "  된장찌개 1인분 먹었어\n\n"
-    "📋 <b>조회</b>\n"
-    "  냉장고에 뭐 있어?\n"
-    "  반찬 뭐 남았어?\n\n"
-    "🍳 <b>메뉴 추천</b>\n"
-    "  오늘 뭐 해먹을까?\n\n"
-    "🛒 <b>장볼 목록</b>\n"
-    "  뭐 사야 해?"
+    "➕ <b>추가</b>\n  달걀 10개 샀어\n  된장찌개 4인분 만들었어\n\n"
+    "➖ <b>사용</b>\n  달걀 2개 썼어\n  된장찌개 1인분 먹었어\n\n"
+    "📋 <b>조회</b>\n  냉장고에 뭐 있어?\n  반찬 뭐 남았어?\n\n"
+    "🍳 <b>메뉴 추천</b>\n  오늘 뭐 해먹을까?\n\n"
+    "🛒 <b>장볼 목록</b>\n  뭐 사야 해?"
 )
+
+
+# ── offset 관리 (GitHub variable) ─────────────────────────────────────────────
+
+def get_offset() -> int:
+    offset_env = os.environ.get("TELEGRAM_OFFSET", "0")
+    try:
+        return int(offset_env)
+    except ValueError:
+        return 0
+
+
+def save_offset(new_offset: int):
+    if not GH_TOKEN:
+        return
+    requests.patch(
+        f"https://api.github.com/repos/{GH_REPO}/actions/variables/TELEGRAM_OFFSET",
+        headers={"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"},
+        json={"name": "TELEGRAM_OFFSET", "value": str(new_offset)},
+        timeout=10,
+    )
+    log.info(f"offset 저장: {new_offset}")
 
 
 # ── Gemini 파싱 ───────────────────────────────────────────────────────────────
@@ -50,17 +68,17 @@ def parse_message(text: str) -> dict:
     prompt = (
         "한국 주부의 냉장고·반찬 관리 메시지를 JSON으로 변환하세요.\n\n"
         "action 종류:\n"
-        '- "add"      : 재료/반찬 추가 (샀어, 있어, 만들었어, 넣었어)\n'
-        '- "use"      : 사용/소비 (썼어, 먹었어, 사용했어, 다 썼어)\n'
-        '- "list"     : 목록 조회 (뭐 있어, 목록, 현황, 뭐 남았어)\n'
+        '- "add"      : 추가 (샀어, 있어, 만들었어, 넣었어)\n'
+        '- "use"      : 사용 (썼어, 먹었어, 사용했어, 다 썼어)\n'
+        '- "list"     : 목록 조회 (뭐 있어, 목록, 현황)\n'
         '- "suggest"  : 메뉴 추천 (뭐 해먹을까, 추천)\n'
         '- "shopping" : 장볼 것 (뭐 사야해, 부족한 거)\n'
         '- "help"     : 도움말\n'
         '- "unknown"  : 기타\n\n'
-        "출력 형식 (JSON만, 설명 없이):\n"
+        "출력 형식 (JSON만):\n"
         '{"action":"add","items":[{"name":"달걀","quantity":10,"unit":"개","category":"기타"}]}\n\n'
         "카테고리: 채소 / 육류 / 해산물 / 유제품 / 반찬 / 냉동 / 기타\n"
-        "수량이 없으면 quantity=1 로 설정\n\n"
+        "수량 없으면 quantity=1\n\n"
         f"메시지: {text}"
     )
     try:
@@ -187,7 +205,7 @@ def handle(text: str):
     elif action == "suggest":
         inventory = get_all(notion)
         if not inventory:
-            send("재고가 없어서 추천이 어려워요 😅\n재료를 먼저 등록해주세요!")
+            send("재고가 없어서 추천이 어려워요 😅")
             return
         items_str = ", ".join(f"{i['name']} {i['quantity']}{i['unit']}" for i in inventory)
         client = genai.Client(api_key=GEMINI_API_KEY)
@@ -195,8 +213,8 @@ def handle(text: str):
             model="gemini-2.5-flash",
             contents=(
                 f"냉장고 재료: {items_str}\n"
-                "이 재료로 만들 수 있는 한국 가정식 메뉴 3가지를 추천해주세요. "
-                "각 메뉴마다 ① 메뉴명 ② 필요한 재료 ③ 조리법 한 줄로 작성해주세요."
+                "이 재료로 만들 수 있는 한국 가정식 메뉴 3가지 추천. "
+                "① 메뉴명 ② 필요한 재료 ③ 조리법 한 줄."
             ),
         )
         send(f"🍳 <b>오늘의 메뉴 추천</b>\n\n{resp.text}")
@@ -217,21 +235,47 @@ def handle(text: str):
 
     else:
         send(
-            "이해하지 못했어요 😅\n\n"
-            "예시:\n"
-            "  달걀 10개 샀어\n"
-            "  된장찌개 4인분 만들었어\n"
-            "  냉장고에 뭐 있어?\n"
-            "  오늘 뭐 해먹을까?\n\n"
-            "'도움말' 이라고 입력하면 전체 사용법을 볼 수 있어요."
+            "이해하지 못했어요 😅\n\n예시:\n"
+            "  달걀 10개 샀어\n  냉장고에 뭐 있어?\n  오늘 뭐 해먹을까?\n\n"
+            "'도움말' 이라고 입력해보세요."
         )
 
 
-# ── 메인 루프 ────────────────────────────────────────────────────────────────
+# ── 실행 모드 ─────────────────────────────────────────────────────────────────
 
-def main():
+def batch_mode():
+    """GitHub Actions용: 쌓인 메시지 처리 후 종료"""
+    offset = get_offset()
+    log.info(f"배치 시작 (offset={offset})")
+    try:
+        resp = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
+            params={"offset": offset, "timeout": 0, "limit": 100},
+            timeout=15,
+        )
+        updates = resp.json().get("result", [])
+        if not updates:
+            log.info("새 메시지 없음")
+            return
+        new_offset = offset
+        for update in updates:
+            new_offset = update["update_id"] + 1
+            msg     = update.get("message", {})
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+            text    = msg.get("text", "").strip()
+            if chat_id == TELEGRAM_CHAT_ID and text:
+                log.info(f"처리: {text}")
+                handle(text)
+        save_offset(new_offset)
+    except Exception as e:
+        log.error(f"배치 오류: {e}")
+        sys.exit(1)
+
+
+def poll_mode():
+    """로컬 개발용: 실시간 폴링"""
     offset = 0
-    log.info("🤖 냉장고 봇 시작!")
+    log.info("🤖 냉장고 봇 시작 (폴링 모드)")
     send("🤖 냉장고 봇이 시작됐어요!\n'도움말' 이라고 입력해보세요.")
     while True:
         try:
@@ -254,4 +298,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--batch" in sys.argv:
+        batch_mode()
+    else:
+        poll_mode()
