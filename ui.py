@@ -24,6 +24,7 @@ from news_summary import (
 )
 from fridge_bot import get_all, upsert, consume
 from quiz_generator import QUIZ_TOPICS, generate_quiz
+from quiz_notion import NOTION_QUIZ_DB_ID, get_stats, save_quiz_result
 from google import genai
 from notion_client import Client as NotionClient
 
@@ -234,6 +235,22 @@ with tab_quiz:
     score = st.session_state.quiz_score
     st.caption(f"이번 세션 점수: {score['correct']} / {score['total']}")
 
+    _quiz_notion_token = NOTION_TOKEN or os.environ.get("NOTION_TOKEN", "")
+    _quiz_notion_ready = bool(_quiz_notion_token and NOTION_QUIZ_DB_ID)
+    if _quiz_notion_ready:
+        with st.expander("📊 전체 통계 (Notion 기록)"):
+            try:
+                stats = get_stats(NotionClient(auth=_quiz_notion_token))
+                if stats["total"] > 0:
+                    rate = stats["correct"] / stats["total"] * 100
+                    st.metric("전체 정답률", f"{stats['correct']}/{stats['total']} ({rate:.0f}%)")
+                    for t_name, t in stats["by_topic"].items():
+                        st.write(f"- {t_name}: {t['correct']}/{t['total']}")
+                else:
+                    st.caption("아직 기록이 없어요.")
+            except Exception as _e:
+                st.caption(f"통계를 불러오지 못했어요: {_e}")
+
     topic = st.selectbox("주제", QUIZ_TOPICS, key="quiz_topic_select")
     if st.button("🎲 문제 내기", type="primary", use_container_width=True):
         with st.spinner("문제 만드는 중..."):
@@ -256,6 +273,11 @@ with tab_quiz:
                 score["total"] += 1
                 if is_correct:
                     score["correct"] += 1
+                if _quiz_notion_ready:
+                    try:
+                        save_quiz_result(NotionClient(auth=_quiz_notion_token), quiz, choice, is_correct)
+                    except Exception:
+                        pass  # 기록 저장 실패해도 퀴즈 풀이 자체는 계속 진행
                 st.rerun()
         else:
             if st.session_state.quiz_last_correct:
