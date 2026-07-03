@@ -23,6 +23,7 @@ from news_summary import (
     _strip_markdown, GEMINI_API_KEY, NOTION_TOKEN,
 )
 from fridge_bot import get_all, upsert, consume
+from quiz_generator import QUIZ_TOPICS, generate_quiz
 from google import genai
 from notion_client import Client as NotionClient
 
@@ -63,7 +64,7 @@ with st.sidebar:
         st.success("저장됐습니다")
 
 # ── 탭 ───────────────────────────────────────────────────────────────────────
-tab_news, tab_fridge = st.tabs(["📈 경제 뉴스", "🧊 냉장고 재고"])
+tab_news, tab_fridge, tab_quiz = st.tabs(["📈 경제 뉴스", "🧊 냉장고 재고", "🧠 퀴즈"])
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -213,3 +214,51 @@ with tab_fridge:
                                 st.rerun()
                 else:
                     st.info("먼저 재료를 추가해주세요.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 탭 3 : 퀴즈
+# ════════════════════════════════════════════════════════════════════════════
+with tab_quiz:
+    st.title("🧠 퀴즈")
+    st.caption("매일 아침 텔레그램으로 오는 퀴즈와 같은 주제를 여기서도 풀어볼 수 있어요.")
+
+    if "quiz_score" not in st.session_state:
+        st.session_state.quiz_score = {"correct": 0, "total": 0}
+    if "quiz_current" not in st.session_state:
+        st.session_state.quiz_current = None
+        st.session_state.quiz_answered = False
+
+    score = st.session_state.quiz_score
+    st.caption(f"이번 세션 점수: {score['correct']} / {score['total']}")
+
+    topic = st.selectbox("주제", QUIZ_TOPICS, key="quiz_topic_select")
+    if st.button("🎲 문제 내기", type="primary", use_container_width=True):
+        with st.spinner("문제 만드는 중..."):
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            st.session_state.quiz_current = generate_quiz(topic, client)
+            st.session_state.quiz_answered = False
+        st.rerun()
+
+    quiz = st.session_state.quiz_current
+    if quiz:
+        st.divider()
+        st.markdown(f"**[{quiz['topic']}]** {quiz['question']}")
+        choice = st.radio("보기", quiz["choices"], key=f"quiz_choice_{id(quiz)}", index=None)
+
+        if not st.session_state.quiz_answered:
+            if st.button("정답 확인", use_container_width=True, disabled=choice is None):
+                is_correct = quiz["choices"].index(choice) == quiz["answer_index"]
+                st.session_state.quiz_answered = True
+                st.session_state.quiz_last_correct = is_correct
+                score["total"] += 1
+                if is_correct:
+                    score["correct"] += 1
+                st.rerun()
+        else:
+            if st.session_state.quiz_last_correct:
+                st.success(f"✅ 정답이에요! {quiz['explanation']}")
+            else:
+                st.error(f"❌ 정답은 '{quiz['choices'][quiz['answer_index']]}' 이에요. {quiz['explanation']}")
+    else:
+        st.info("주제를 고르고 '문제 내기' 버튼을 눌러보세요.")

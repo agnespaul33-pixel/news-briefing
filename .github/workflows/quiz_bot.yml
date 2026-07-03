@@ -1,0 +1,26 @@
+name: Morning Quiz Bot
+
+on:
+  schedule:
+    - cron: '0 22 * * *'   # KST 07:00 아침 퀴즈 (UTC 22:00 전날, 매일)
+  workflow_dispatch:
+
+jobs:
+  run-quiz-bot:
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - run: python quiz_bot.py
