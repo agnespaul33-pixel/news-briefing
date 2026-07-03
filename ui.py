@@ -159,6 +159,7 @@ with tab_fridge:
         or os.environ.get("NOTION_TOKEN", "")
     )
 
+    notion_f = None
     if not _notion_token:
         st.warning("NOTION_TOKEN이 설정되지 않았어요.")
     else:
@@ -167,8 +168,9 @@ with tab_fridge:
             inventory = get_all(notion_f)
         except Exception as _e:
             st.error(f"Notion 연결 오류: {_e}")
-            st.stop()
+            notion_f = None
 
+    if notion_f is not None:
         if inventory:
             by_cat: dict[str, list] = {}
             for it in inventory:
