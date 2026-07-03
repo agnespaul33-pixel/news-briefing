@@ -237,6 +237,11 @@ with tab_quiz:
 
     _quiz_notion_token = NOTION_TOKEN or os.environ.get("NOTION_TOKEN", "")
     _quiz_notion_ready = bool(_quiz_notion_token and NOTION_QUIZ_DB_ID)
+    if not _quiz_notion_ready:
+        st.caption(
+            f"ℹ️ Notion 기록 비활성 (NOTION_TOKEN: {'있음' if _quiz_notion_token else '없음'}, "
+            f"NOTION_QUIZ_DB_ID: {'있음' if NOTION_QUIZ_DB_ID else '없음'})"
+        )
     if _quiz_notion_ready:
         with st.expander("📊 전체 통계 (Notion 기록)"):
             try:
@@ -276,13 +281,16 @@ with tab_quiz:
                 if _quiz_notion_ready:
                     try:
                         save_quiz_result(NotionClient(auth=_quiz_notion_token), quiz, choice, is_correct)
-                    except Exception:
-                        pass  # 기록 저장 실패해도 퀴즈 풀이 자체는 계속 진행
+                        st.session_state.quiz_notion_status = "✅ Notion에 저장됐어요."
+                    except Exception as _e:
+                        st.session_state.quiz_notion_status = f"⚠️ Notion 저장 실패: {_e}"
                 st.rerun()
         else:
             if st.session_state.quiz_last_correct:
                 st.success(f"✅ 정답이에요! {quiz['explanation']}")
             else:
                 st.error(f"❌ 정답은 '{quiz['choices'][quiz['answer_index']]}' 이에요. {quiz['explanation']}")
+            if "quiz_notion_status" in st.session_state:
+                st.caption(st.session_state.quiz_notion_status)
     else:
         st.info("주제를 고르고 '문제 내기' 버튼을 눌러보세요.")
