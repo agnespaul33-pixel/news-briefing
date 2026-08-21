@@ -29,10 +29,10 @@ def _secret(name: str) -> str:
 
 
 SAZU_API_KEY = _secret("SAZU_API_KEY")
-GEMINI_API_KEY = _secret("GEMINI_API_KEY")
+GEMINI_API_KEY = _secret("SAJU_GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-_missing = [n for n, v in (("SAZU_API_KEY", SAZU_API_KEY), ("GEMINI_API_KEY", GEMINI_API_KEY)) if not v]
+_missing = [n for n, v in (("SAZU_API_KEY", SAZU_API_KEY), ("SAJU_GEMINI_API_KEY", GEMINI_API_KEY)) if not v]
 if _missing:
     st.error(f"환경변수 누락: {', '.join(_missing)} — .env 또는 Streamlit secrets에 설정하세요.")
     st.stop()
