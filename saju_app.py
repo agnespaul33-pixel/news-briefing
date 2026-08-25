@@ -5,6 +5,7 @@
 """
 
 import os
+from datetime import datetime, timedelta
 
 import altair as alt
 import pandas as pd
@@ -30,6 +31,9 @@ def _secret(name: str) -> str:
 
 SAZU_API_KEY = _secret("SAZU_API_KEY")
 GEMINI_API_KEY = _secret("SAJU_GEMINI_API_KEY")
+# 주의: gemini-1.5-flash, gemini-2.5-flash-lite는 이미 이 계정에서 사용 불가(404).
+# gemini-2.5-flash는 2026-10-16 이후 종료 예정(Google 공식, 확정일은 6개월 전 재공지) —
+# 그때는 GEMINI_MODEL 환경변수로 gemini-3.6-flash 등으로 전환.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 _missing = [n for n, v in (("SAZU_API_KEY", SAZU_API_KEY), ("SAJU_GEMINI_API_KEY", GEMINI_API_KEY)) if not v]
@@ -53,6 +57,1001 @@ ELEMENT_ORDER = ["wood", "fire", "earth", "metal", "water"]
 ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "water": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
 PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
+
+# ── 신살 조견표 (사주첩경 전통 방식: 역마·도화·화개는 연지 삼합 기준, 천을귀인은 일간 기준) ──
+BRANCH_CHARS = "子丑寅卯辰巳午未申酉戌亥"
+STEM_CHARS = "甲乙丙丁戊己庚辛壬癸"
+
+TRIAD_OF_BRANCH = {
+    "寅": "인오술", "午": "인오술", "戌": "인오술",
+    "申": "신자진", "子": "신자진", "辰": "신자진",
+    "巳": "사유축", "酉": "사유축", "丑": "사유축",
+    "亥": "해묘미", "卯": "해묘미", "未": "해묘미",
+}
+YEOKMA_TARGET = {"인오술": "申", "신자진": "寅", "사유축": "亥", "해묘미": "巳"}
+DOHWA_TARGET = {"인오술": "卯", "신자진": "酉", "사유축": "午", "해묘미": "子"}
+HWAGAE_TARGET = {"인오술": "戌", "신자진": "辰", "사유축": "丑", "해묘미": "未"}
+
+STEM_GROUP = {
+    "甲": "갑무경", "戊": "갑무경", "庚": "갑무경",
+    "乙": "을기", "己": "을기",
+    "丙": "병정", "丁": "병정",
+    "辛": "신금",
+    "壬": "임계", "癸": "임계",
+}
+CHEONEUL_TARGET = {
+    "갑무경": {"丑", "未"}, "을기": {"子", "申"}, "병정": {"亥", "酉"},
+    "신금": {"寅", "午"}, "임계": {"巳", "卯"},
+}
+
+
+# SAZU API는 skyFull/earthFull을 한자가 아닌 한글로 반환한다(예: 일간 己=='기토', 일지 卯=='묘목').
+# 아래 두 매핑으로 한글→한자 역변환한다. "신"은 천간 辛과 지지 申이 둘 다 '신'으로 읽혀 충돌하므로,
+# 반드시 두 매핑을 분리해두고, 호출부가 넘긴 charset(STEM_CHARS 또는 BRANCH_CHARS)으로 어느 쪽인지
+# 문맥에 맞게 판별해야 한다(skyFull을 파싱할 땐 STEM_CHARS를 넘기므로 辛로, earthFull을 파싱할 땐
+# BRANCH_CHARS를 넘기므로 申으로 정확히 갈린다).
+STEM_HANGUL_TO_HANJA = {
+    "갑": "甲", "을": "乙", "병": "丙", "정": "丁", "무": "戊",
+    "기": "己", "경": "庚", "신": "辛", "임": "壬", "계": "癸",
+}
+BRANCH_HANGUL_TO_HANJA = {
+    "자": "子", "축": "丑", "인": "寅", "묘": "卯", "진": "辰", "사": "巳",
+    "오": "午", "미": "未", "신": "申", "유": "酉", "술": "戌", "해": "亥",
+}
+
+
+def _extract_char(text: str | None, charset: str) -> str | None:
+    """표시용 문자열(예: SAZU의 '기토', '묘목')에서 원본 한자 1글자를 추출."""
+    if not text:
+        return None
+    for ch in text:
+        if ch in charset:
+            return ch
+        for hangul_map in (STEM_HANGUL_TO_HANJA, BRANCH_HANGUL_TO_HANJA):
+            mapped = hangul_map.get(ch)
+            if mapped and mapped in charset:
+                return mapped
+    return None
+
+
+def compute_sinsal(fp: dict) -> dict:
+    """역마·도화·화개(연지+일지 삼합 기준, 둘 다 체크)와 천을귀인(일간 기준)을 결정적으로 계산.
+
+    사주첩경 전통은 연지 기준이 정석이지만, 원광만세력·루시아만세력 등 대중 만세력 앱들은
+    일지 기준도 함께 보거나 일지를 기본으로 쓰는 경우가 많아 둘 다 체크합니다.
+
+    fp: modules["fourPillars"] — {"year": {...}, "month": {...}, "day": {...}, "hour": {...}}
+    각 pillar dict는 'earthFull'(지지 표시문자열), day pillar는 'skyFull'(일간 표시문자열) 포함.
+    반환: {"역마": {"연지기준": [...], "일지기준": [...]}, "도화": {...}, "화개": {...},
+           "천을귀인": [pillar_label,...]} — 찾은 게 없으면 빈 리스트.
+    """
+    PILLAR_KR = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+
+    year_p = fp.get("year")
+    day_p = fp.get("day")
+    result = {
+        "역마": {"연지기준": [], "일지기준": []},
+        "도화": {"연지기준": [], "일지기준": []},
+        "화개": {"연지기준": [], "일지기준": []},
+        "천을귀인": [],
+    }
+    if year_p is None or day_p is None:
+        return result
+
+    year_branch = _extract_char(year_p.get("earthFull"), BRANCH_CHARS)
+    day_branch = _extract_char(day_p.get("earthFull"), BRANCH_CHARS)
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS)
+
+    branches_present = {}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if b:
+            branches_present.setdefault(b, []).append(PILLAR_KR[key])
+
+    for base_branch, base_label in ((year_branch, "연지기준"), (day_branch, "일지기준")):
+        triad = TRIAD_OF_BRANCH.get(base_branch) if base_branch else None
+        if not triad:
+            continue
+        for name, table in (("역마", YEOKMA_TARGET), ("도화", DOHWA_TARGET), ("화개", HWAGAE_TARGET)):
+            target = table[triad]
+            if target in branches_present:
+                result[name][base_label] = branches_present[target]
+
+    stem_group = STEM_GROUP.get(day_stem) if day_stem else None
+    if stem_group:
+        targets = CHEONEUL_TARGET[stem_group]
+        found = []
+        for t in targets:
+            if t in branches_present:
+                found.extend(branches_present[t])
+        result["천을귀인"] = found
+
+    return result
+
+
+# ── 형충파해(合冲刑破害) 결정적 계산 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ──
+# 검증 끝나기 전까지 make_prompt()/format_sazu_context()에서 호출하지 않습니다.
+# test_hyeongchunghae.py 로 별도 실행해 원광만세력·루시아만세력과 대조하세요.
+
+STEM_HAP = {
+    frozenset({"甲", "己"}): ("土", "갑기합토"),
+    frozenset({"乙", "庚"}): ("金", "을경합금"),
+    frozenset({"丙", "辛"}): ("水", "병신합수"),
+    frozenset({"丁", "壬"}): ("木", "정임합목"),
+    frozenset({"戊", "癸"}): ("火", "무계합화"),
+}
+
+BRANCH_YUKHAP = {
+    frozenset({"子", "丑"}): ("土", "자축합토"),
+    frozenset({"寅", "亥"}): ("木", "인해합목"),
+    frozenset({"卯", "戌"}): ("火", "묘술합화"),
+    frozenset({"辰", "酉"}): ("金", "진유합금"),
+    frozenset({"巳", "申"}): ("水", "사신합수"),
+    # 오미합은 화/토로 갈리는 등 학파에 따라 이견 있음 — 오행 미확정으로 표기
+    frozenset({"午", "未"}): (None, "오미합(오행은 학파에 따라 화/토로 갈림)"),
+}
+
+TRIAD_GROUPS = {
+    "인오술": {"왕지": "午", "생지": "寅", "고지": "戌", "오행": "火"},
+    "신자진": {"왕지": "子", "생지": "申", "고지": "辰", "오행": "水"},
+    "사유축": {"왕지": "酉", "생지": "巳", "고지": "丑", "오행": "金"},
+    "해묘미": {"왕지": "卯", "생지": "亥", "고지": "未", "오행": "木"},
+}
+
+BANGHAP_GROUPS = {
+    frozenset({"寅", "卯", "辰"}): ("木", "인묘진 방합(목방)"),
+    frozenset({"巳", "午", "未"}): ("火", "사오미 방합(화방)"),
+    frozenset({"申", "酉", "戌"}): ("金", "신유술 방합(금방)"),
+    frozenset({"亥", "子", "丑"}): ("水", "해자축 방합(수방)"),
+}
+
+CHUNG_PAIRS = {
+    frozenset({"子", "午"}): "자오충", frozenset({"丑", "未"}): "축미충",
+    frozenset({"寅", "申"}): "인신충", frozenset({"卯", "酉"}): "묘유충",
+    frozenset({"辰", "戌"}): "진술충", frozenset({"巳", "亥"}): "사해충",
+}
+
+PA_PAIRS = {
+    frozenset({"子", "酉"}): "자유파", frozenset({"丑", "辰"}): "축진파",
+    frozenset({"寅", "亥"}): "인해파", frozenset({"卯", "午"}): "묘오파",
+    frozenset({"巳", "申"}): "사신파", frozenset({"戌", "未"}): "술미파",
+}
+
+HAE_PAIRS = {
+    frozenset({"子", "未"}): "자미해", frozenset({"丑", "午"}): "축오해",
+    frozenset({"寅", "巳"}): "인사해", frozenset({"卯", "辰"}): "묘진해",
+    frozenset({"申", "亥"}): "신해해", frozenset({"酉", "戌"}): "유술해",
+}
+
+TRIPLE_HYEONG_GROUPS = [
+    ({"寅", "巳", "申"}, "지세지형(寅巳申)"),
+    ({"丑", "戌", "未"}, "무은지형(丑戌未)"),
+]
+DOUBLE_HYEONG = {frozenset({"子", "卯"}): "무례지형(子卯)"}
+SELF_HYEONG_BRANCHES = {"辰", "午", "酉", "亥"}  # 같은 글자 2개 이상이면 자형
+
+PILLAR_KR_STEM = {"year": "연간", "month": "월간", "day": "일간", "hour": "시간"}
+PILLAR_KR_BRANCH = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+ADJACENT_PAIRS = {frozenset({"year", "month"}), frozenset({"month", "day"}), frozenset({"day", "hour"})}
+
+
+def compute_hyeongchunghae(fp: dict) -> dict:
+    """4주 8자 원국에서 천간합·육합·삼합·반합·방합·충·형·파·해를 전부 결정적으로 계산.
+
+    fp: modules["fourPillars"] — {"year":{...},"month":{...},"day":{...},"hour":{...}}
+    반환: {"천간합":[...], "육합":[...], "삼합":[...], "반합":[...], "방합":[...],
+           "충":[...], "형":[...], "파":[...], "해":[...]} — 각 항목은 사람이 읽을 문자열 리스트.
+    """
+    order = ["year", "month", "day", "hour"]
+    stems, branches = {}, {}
+    for key in order:
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if s:
+            stems[key] = s
+        if b:
+            branches[key] = b
+
+    result = {name: [] for name in ("천간합", "육합", "삼합", "반합", "방합", "충", "형", "파", "해")}
+
+    def _adj(k1, k2):
+        return "인접" if frozenset({k1, k2}) in ADJACENT_PAIRS else "원격"
+
+    # 천간합
+    skeys = list(stems.keys())
+    for i in range(len(skeys)):
+        for j in range(i + 1, len(skeys)):
+            k1, k2 = skeys[i], skeys[j]
+            pair = frozenset({stems[k1], stems[k2]})
+            if pair in STEM_HAP:
+                _, name = STEM_HAP[pair]
+                result["천간합"].append(f"{PILLAR_KR_STEM[k1]}-{PILLAR_KR_STEM[k2]} {name}({_adj(k1, k2)})")
+
+    # 지지 2개 조합: 육합·충·파·해·무례지형(자묘)
+    bkeys = list(branches.keys())
+    for i in range(len(bkeys)):
+        for j in range(i + 1, len(bkeys)):
+            k1, k2 = bkeys[i], bkeys[j]
+            pair = frozenset({branches[k1], branches[k2]})
+            label = f"{PILLAR_KR_BRANCH[k1]}-{PILLAR_KR_BRANCH[k2]}"
+            adj = _adj(k1, k2)
+            if pair in BRANCH_YUKHAP:
+                _, name = BRANCH_YUKHAP[pair]
+                result["육합"].append(f"{label} {name}({adj})")
+            if pair in CHUNG_PAIRS:
+                result["충"].append(f"{label} {CHUNG_PAIRS[pair]}({adj})")
+            if pair in PA_PAIRS:
+                result["파"].append(f"{label} {PA_PAIRS[pair]}({adj})")
+            if pair in HAE_PAIRS:
+                result["해"].append(f"{label} {HAE_PAIRS[pair]}({adj})")
+            if pair in DOUBLE_HYEONG:
+                result["형"].append(f"{label} {DOUBLE_HYEONG[pair]}({adj})")
+
+    # 자형 (같은 지지가 2개 이상 겹칠 때만 성립하는 4글자 한정)
+    branch_positions = {}
+    for k, b in branches.items():
+        branch_positions.setdefault(b, []).append(k)
+    for b, ks in branch_positions.items():
+        if b in SELF_HYEONG_BRANCHES and len(ks) >= 2:
+            labels = ", ".join(PILLAR_KR_BRANCH[k] for k in ks)
+            result["형"].append(f"{labels} 자형({b}{b})")
+
+    present = set(branches.values())
+
+    # 삼형 (세 글자 조합, 2/3만 있어도 부분 성립으로 표기)
+    for group, name in TRIPLE_HYEONG_GROUPS:
+        found = group & present
+        if len(found) >= 2:
+            found_labels = [PILLAR_KR_BRANCH[k] for k, b in branches.items() if b in found]
+            status = "완전" if len(found) == 3 else "부분(2/3)"
+            result["형"].append(f"{', '.join(found_labels)} {name} {status}")
+
+    # 삼합/반합 (왕지 없는 생지+고지 조합은 불성립 처리 — 왕지 반드시 포함)
+    for triad_name, info in TRIAD_GROUPS.items():
+        wangji, saengji, goji, elem = info["왕지"], info["생지"], info["고지"], info["오행"]
+        has_w, has_s, has_g = wangji in present, saengji in present, goji in present
+        if has_w and has_s and has_g:
+            result["삼합"].append(f"{triad_name} 삼합({elem}국) 완전 성립")
+        elif has_w and has_s:
+            result["반합"].append(f"{triad_name} 생지반합({saengji}{wangji})")
+        elif has_w and has_g:
+            result["반합"].append(f"{triad_name} 고지반합({wangji}{goji})")
+
+    # 방합 (세 글자 모두 있어야 성립)
+    for group_set, (_, name) in BANGHAP_GROUPS.items():
+        if group_set <= present:
+            result["방합"].append(name)
+
+    return result
+
+
+def format_hyeongchunghae(hch: dict) -> str:
+    order = ["천간합", "육합", "삼합", "반합", "방합", "충", "형", "파", "해"]
+    lines = []
+    for name in order:
+        items = hch.get(name, [])
+        lines.append(f"  {name}: " + ("; ".join(items) if items else "없음"))
+    return "\n".join(lines)
+
+
+# ── 십성(十星)·12운성(포태법) 결정적 계산 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ──
+
+STEM_ELEMENT = {
+    "甲": "木", "乙": "木", "丙": "火", "丁": "火", "戊": "土",
+    "己": "土", "庚": "金", "辛": "金", "壬": "水", "癸": "水",
+}
+STEM_YINYANG = {  # True=양, False=음
+    "甲": True, "丙": True, "戊": True, "庚": True, "壬": True,
+    "乙": False, "丁": False, "己": False, "辛": False, "癸": False,
+}
+BRANCH_ELEMENT = {
+    "子": "水", "丑": "土", "寅": "木", "卯": "木", "辰": "土", "巳": "火",
+    "午": "火", "未": "土", "申": "金", "酉": "金", "戌": "土", "亥": "水",
+}
+BRANCH_YINYANG = {  # 양지: 子寅辰午申戌 / 음지: 丑卯巳未酉亥
+    "子": True, "寅": True, "辰": True, "午": True, "申": True, "戌": True,
+    "丑": False, "卯": False, "巳": False, "未": False, "酉": False, "亥": False,
+}
+ELEMENT_GENERATES = {"木": "火", "火": "土", "土": "金", "金": "水", "水": "木"}  # 상생
+ELEMENT_CONTROLS = {"木": "土", "土": "水", "水": "火", "火": "金", "金": "木"}  # 상극
+
+# 지지 십성 계산용 — 지장간 정기(正氣) 천간 (지지 자체 음양이 아닌, 정기 천간의 오행·음양을 써야 정확함)
+BRANCH_JEONGGI_STEM = {
+    "子": "癸", "丑": "己", "寅": "甲", "卯": "乙", "辰": "戊", "巳": "丙",
+    "午": "丁", "未": "己", "申": "庚", "酉": "辛", "戌": "戊", "亥": "壬",
+}
+
+
+def sipseong_of(day_stem: str, target_element: str, target_yinyang: bool) -> str | None:
+    """일간 대비 대상(천간 또는 지지)의 십성을 오행 관계+음양 일치 여부로 판정."""
+    day_element = STEM_ELEMENT.get(day_stem)
+    day_yinyang = STEM_YINYANG.get(day_stem)
+    if day_element is None or day_yinyang is None:
+        return None
+    same_yy = day_yinyang == target_yinyang
+
+    if target_element == day_element:
+        return "비견" if same_yy else "겁재"
+    if ELEMENT_GENERATES.get(day_element) == target_element:  # 일간이 생함
+        return "식신" if same_yy else "상관"
+    if ELEMENT_CONTROLS.get(day_element) == target_element:  # 일간이 극함
+        return "편재" if same_yy else "정재"
+    if ELEMENT_CONTROLS.get(target_element) == day_element:  # 대상이 일간을 극함
+        return "편관" if same_yy else "정관"
+    if ELEMENT_GENERATES.get(target_element) == day_element:  # 대상이 일간을 생함
+        return "편인" if same_yy else "정인"
+    return None
+
+
+def compute_sipseong(fp: dict) -> dict:
+    """4주 8자의 십성을 전부 계산. 일간 자신은 "일간(본인)"으로 표기(십성 없음).
+
+    지지 십성은 지장간 정기(正氣) 천간의 오행·음양을 기준으로 계산합니다
+    (지지 자체의 음양을 쓰면 子·巳·午·亥 네 지지에서 틀린 결과가 나옴 — 정기 천간 기준이 정확).
+    반환: {"연간":..., "월간":..., "일간":"일간(본인)", "시간":...,
+           "연지":..., "월지":..., "일지":..., "시지":...}
+    """
+    day_p = fp.get("day")
+    if day_p is None:
+        return {}
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS)
+    if day_stem is None:
+        return {}
+
+    result = {}
+    stem_labels = {"year": "연간", "month": "월간", "day": "일간", "hour": "시간"}
+    branch_labels = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        if s:
+            if key == "day":
+                result[stem_labels[key]] = "일간(본인)"
+            else:
+                result[stem_labels[key]] = sipseong_of(day_stem, STEM_ELEMENT.get(s), STEM_YINYANG.get(s)) or "?"
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if b:
+            jg_stem = BRANCH_JEONGGI_STEM.get(b)
+            elem = STEM_ELEMENT.get(jg_stem) if jg_stem else BRANCH_ELEMENT.get(b)
+            yy = STEM_YINYANG.get(jg_stem) if jg_stem else BRANCH_YINYANG.get(b)
+            result[branch_labels[key]] = sipseong_of(day_stem, elem, yy) or "?"
+
+    return result
+
+
+def format_sipseong(sipseong: dict) -> str:
+    order = ["연간", "연지", "월간", "월지", "일간", "일지", "시간", "시지"]
+    return "\n".join(f"  {k}: {sipseong.get(k, '-')}" for k in order if k in sipseong)
+
+
+# 12운성(포태법) — 일간별 장생 위치 + 순행(양간)/역행(음간)
+BRANCH_ORDER = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
+STAGE_NAMES = ["장생", "목욕", "관대", "건록", "제왕", "쇠", "병", "사", "묘", "절", "태", "양"]
+STEM_JANGSAENG = {
+    "甲": "亥", "丙": "寅", "戊": "寅", "庚": "巳", "壬": "申",
+    "乙": "午", "丁": "酉", "己": "酉", "辛": "子", "癸": "卯",
+}
+
+
+def twelve_stage_of(day_stem: str, branch: str) -> str | None:
+    start = STEM_JANGSAENG.get(day_stem)
+    if start is None or branch not in BRANCH_ORDER:
+        return None
+    start_idx = BRANCH_ORDER.index(start)
+    branch_idx = BRANCH_ORDER.index(branch)
+    if STEM_YINYANG.get(day_stem):  # 양간 순행
+        diff = (branch_idx - start_idx) % 12
+    else:  # 음간 역행
+        diff = (start_idx - branch_idx) % 12
+    return STAGE_NAMES[diff]
+
+
+def compute_twelve_stages(fp: dict) -> dict:
+    """4주 지지 각각의 12운성(포태법)을 일간 기준으로 계산.
+
+    반환: {"연지": "장생", "월지": "제왕", "일지": ..., "시지": ...}
+    """
+    day_p = fp.get("day")
+    if day_p is None:
+        return {}
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS)
+    if day_stem is None:
+        return {}
+
+    labels = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+    result = {}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if b:
+            result[labels[key]] = twelve_stage_of(day_stem, b) or "?"
+    return result
+
+
+def format_twelve_stages(stages: dict) -> str:
+    order = ["연지", "월지", "일지", "시지"]
+    return "\n".join(f"  {k}: {stages.get(k, '-')}" for k in order if k in stages)
+
+
+# ── 신살 확장 8종 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ──────────
+# 학파 간 이견이 큰 귀문관살·현침살·홍염살은 제외. 표가 명확히 검증되는 것만 포함.
+
+MUNCHANG_TARGET = {  # 문창귀인: 일간이 생하는 식신 위치 (12운성 양간=병지/음간=장생지)
+    "甲": "巳", "乙": "午", "丙": "申", "丁": "酉", "戊": "申",
+    "己": "酉", "庚": "亥", "辛": "子", "壬": "寅", "癸": "卯",
+}
+AMROK_TARGET = {  # 암록: 건록의 육합 상대 지지
+    "甲": "亥", "乙": "戌", "丙": "申", "丁": "未", "戊": "申",
+    "己": "未", "庚": "巳", "辛": "辰", "壬": "寅", "癸": "丑",
+}
+GEUMYEO_TARGET = {  # 금여(록): 통용 조견표
+    "甲": "辰", "乙": "巳", "丙": "未", "丁": "申", "戊": "未",
+    "己": "申", "庚": "戌", "辛": "亥", "壬": "丑", "癸": "寅",
+}
+YANGIN_TARGET = {  # 양인살: 일간과 같은 오행의 제왕지 (양간만 성립, 음간은 해당없음)
+    "甲": "卯", "丙": "午", "戊": "午", "庚": "酉", "壬": "子",
+}
+GOEGANG_PILLARS = {"戊戌", "庚辰", "庚戌", "壬辰"}
+BAEKHO_PILLARS = {"甲辰", "乙未", "丙戌", "丁丑", "戊辰", "壬戌", "癸丑"}
+WONJIN_PAIRS = {  # 원진살
+    frozenset({"子", "未"}): "자미원진", frozenset({"丑", "午"}): "축오원진",
+    frozenset({"寅", "酉"}): "인유원진", frozenset({"卯", "申"}): "묘신원진",
+    frozenset({"辰", "亥"}): "진해원진", frozenset({"巳", "戌"}): "사술원진",
+}
+GONGMANG_PAIRS = {  # 순중공망: 각 순(旬)의 시작 지지 -> (공망1, 공망2)
+    "子": ("戌", "亥"), "戌": ("申", "酉"), "申": ("午", "未"),
+    "午": ("辰", "巳"), "辰": ("寅", "卯"), "寅": ("子", "丑"),
+}
+
+
+def compute_sinsal_extended(fp: dict) -> dict:
+    """문창귀인·암록·금여·양인살·괴강살·백호살·원진살·공망을 결정적으로 계산.
+
+    반환: {"문창귀인":[...], "암록":[...], "금여":[...], "양인살":[...],
+           "괴강살":[...], "백호살":[...], "원진살":[...], "공망":[...]}
+    """
+    labels = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
+    branch_labels = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+    result = {name: [] for name in ("문창귀인", "암록", "금여", "양인살", "괴강살", "백호살", "원진살", "공망")}
+
+    day_p = fp.get("day")
+    if day_p is None:
+        return result
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS)
+    day_branch = _extract_char(day_p.get("earthFull"), BRANCH_CHARS)
+    if day_stem is None:
+        return result
+
+    branches_present = {}
+    pillars_str = {}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if b:
+            branches_present.setdefault(b, []).append(branch_labels[key])
+        if s and b:
+            pillars_str[key] = s + b
+
+    # 일간 기준 (문창귀인·암록·금여·양인살)
+    for name, table in (
+        ("문창귀인", MUNCHANG_TARGET), ("암록", AMROK_TARGET),
+        ("금여", GEUMYEO_TARGET), ("양인살", YANGIN_TARGET),
+    ):
+        target = table.get(day_stem)
+        if target and target in branches_present:
+            result[name] = branches_present[target]
+
+    # 일주(간지 조합) 고정 리스트 — 모든 기둥에서 체크 (백호는 특히 일주에 있을 때 의미 큼)
+    for key, pstr in pillars_str.items():
+        if pstr in GOEGANG_PILLARS:
+            result["괴강살"].append(labels[key])
+        if pstr in BAEKHO_PILLARS:
+            result["백호살"].append(labels[key])
+
+    # 원진살 (지지 2개 조합)
+    bkeys = list(branches_present.keys())
+    checked = set()
+    for b1 in bkeys:
+        for b2 in bkeys:
+            if b1 >= b2:
+                continue
+            pair = frozenset({b1, b2})
+            if pair in WONJIN_PAIRS and pair not in checked:
+                checked.add(pair)
+                result["원진살"].append(
+                    f"{'/'.join(branches_present[b1])}-{'/'.join(branches_present[b2])} {WONJIN_PAIRS[pair]}"
+                )
+
+    # 공망 (일주 기준, 연지·월지·시지 중 공망 지지가 있으면 표시. 일지 자체는 공망 대상 아님)
+    if day_branch:
+        # 일주가 속한 순(旬)의 갑(甲) 짝 지지를 역산
+        stem_order = "甲乙丙丁戊己庚辛壬癸"
+        branch_order12 = "子丑寅卯辰巳午未申酉戌亥"
+        day_stem_idx = stem_order.index(day_stem)
+        day_branch_idx = branch_order12.index(day_branch)
+        gap_branch_idx = (day_branch_idx - day_stem_idx) % 12
+        gap_branch = branch_order12[gap_branch_idx]
+        gm1, gm2 = GONGMANG_PAIRS.get(gap_branch, (None, None))
+        for gm in (gm1, gm2):
+            if gm and gm in branches_present:
+                for label in branches_present[gm]:
+                    if label != "일지":  # 일지 자신은 정의상 공망이 될 수 없음
+                        result["공망"].append(f"{label}({gm})")
+
+    return result
+
+
+def format_sinsal_extended(ext: dict) -> str:
+    order = ["문창귀인", "암록", "금여", "양인살", "괴강살", "백호살", "원진살", "공망"]
+    lines = []
+    for name in order:
+        items = ext.get(name, [])
+        lines.append(f"  {name}: " + ("; ".join(items) if items else "없음"))
+    return "\n".join(lines)
+
+
+# ── 지장간·납음오행 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ────────
+# 지장간은 여기/중기/정기 "구성 천간"만 표시 (정확한 날짜 배분은 책마다 이견 있어 제외).
+# 오화(午)의 중기(己)는 포함 여부가 갈리는 지점이라 별도 표시.
+
+JIJANGGAN = {  # 각 지지: [(천간, 단계), ...] — 여기/중기/정기 명시적 지정(슬라이싱으로 유추하지 않음)
+    "子": [("壬", "여기"), ("癸", "정기")],
+    "丑": [("癸", "여기"), ("辛", "중기"), ("己", "정기")],
+    "寅": [("戊", "여기"), ("丙", "중기"), ("甲", "정기")],
+    "卯": [("甲", "여기"), ("乙", "정기")],
+    "辰": [("乙", "여기"), ("癸", "중기"), ("戊", "정기")],
+    "巳": [("戊", "여기"), ("庚", "중기"), ("丙", "정기")],
+    "午": [("丙", "여기"), ("己", "중기"), ("丁", "정기")],  # 己(중기) 포함 여부는 학파에 따라 갈림
+    "未": [("丁", "여기"), ("乙", "중기"), ("己", "정기")],
+    "申": [("戊", "여기"), ("壬", "중기"), ("庚", "정기")],
+    "酉": [("庚", "여기"), ("辛", "정기")],
+    "戌": [("辛", "여기"), ("丁", "중기"), ("戊", "정기")],
+    "亥": [("戊", "여기"), ("甲", "중기"), ("壬", "정기")],
+}
+
+# 납음오행 — 60갑자 고정표 (이견 없음)
+NAYIN_TABLE = {
+    "甲子": "해중금", "乙丑": "해중금", "丙寅": "노중화", "丁卯": "노중화",
+    "戊辰": "대림목", "己巳": "대림목", "庚午": "노방토", "辛未": "노방토",
+    "壬申": "검봉금", "癸酉": "검봉금", "甲戌": "산두화", "乙亥": "산두화",
+    "丙子": "간하수", "丁丑": "간하수", "戊寅": "성두토", "己卯": "성두토",
+    "庚辰": "백랍금", "辛巳": "백랍금", "壬午": "양류목", "癸未": "양류목",
+    "甲申": "천중수", "乙酉": "천중수", "丙戌": "옥상토", "丁亥": "옥상토",
+    "戊子": "벽력화", "己丑": "벽력화", "庚寅": "송백목", "辛卯": "송백목",
+    "壬辰": "장류수", "癸巳": "장류수", "甲午": "사중금", "乙未": "사중금",
+    "丙申": "산하화", "丁酉": "산하화", "戊戌": "평지목", "己亥": "평지목",
+    "庚子": "벽상토", "辛丑": "벽상토", "壬寅": "금박금", "癸卯": "금박금",
+    "甲辰": "복등화", "乙巳": "복등화", "丙午": "천하수", "丁未": "천하수",
+    "戊申": "대역토", "己酉": "대역토", "庚戌": "차천금", "辛亥": "차천금",
+    "壬子": "상자목", "癸丑": "상자목", "甲寅": "대계수", "乙卯": "대계수",
+    "丙辰": "사중토", "丁巳": "사중토", "戊午": "천상화", "己未": "천상화",
+    "庚申": "석류목", "辛酉": "석류목", "壬戌": "대해수", "癸亥": "대해수",
+}
+
+
+def compute_jijanggan(fp: dict) -> dict:
+    """4주 각 지지의 지장간(숨은 천간) 구성을 반환. 날짜 배분 없이 단계(여기/중기/정기)만.
+
+    반환: {"연지": [("戊","여기"),("丙","중기"),("甲","정기")], "월지": [...], ...}
+    """
+    labels = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+    result = {}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if b and b in JIJANGGAN:
+            result[labels[key]] = JIJANGGAN[b]
+    return result
+
+
+def format_jijanggan(jjg: dict) -> str:
+    order = ["연지", "월지", "일지", "시지"]
+    lines = []
+    for k in order:
+        pairs = jjg.get(k)
+        if pairs:
+            text = ", ".join(f"{stem}({stage})" for stem, stage in pairs)
+            lines.append(f"  {k}: {text}")
+    return "\n".join(lines)
+
+
+def compute_nayin(fp: dict) -> dict:
+    """4주 각 기둥(간지 조합)의 납음오행을 반환.
+
+    반환: {"연주": "해중금", "월주": ..., "일주": ..., "시주": ...}
+    """
+    labels = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
+    result = {}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if s and b:
+            pillar = s + b
+            result[labels[key]] = NAYIN_TABLE.get(pillar, "?")
+    return result
+
+
+def format_nayin(nayin: dict) -> str:
+    order = ["연주", "월주", "일주", "시주"]
+    return "\n".join(f"  {k}: {nayin.get(k, '-')}" for k in order if k in nayin)
+
+
+# ── 출생시각 역사적 보정 — 서머타임 + 표준시 기준 변경 ──────────────────────────
+# 1) 서머타임(일광절약시간제) 12개 기간: 시계가 1시간 앞당겨져 있었으므로 -1시간
+# 2) 127도30분 표준시 기간(1908~1911, 1954~1961): 당시 UTC+8:30을 표준시로 썼으므로
+#    진태양시 보정 시 기준경도를 135도가 아닌 127.5도로 써야 함(둘 다 sajuplus.com 척척사주
+#    공개 자료 기준 — 정부 문헌 대조 권장).
+DST_PERIODS = [  # (시작, 종료) — 시작 이상 종료 미만이면 서머타임 적용 중
+    (datetime(1948, 6, 1, 0, 0), datetime(1948, 9, 13, 0, 0)),
+    (datetime(1949, 4, 3, 0, 0), datetime(1949, 9, 11, 0, 0)),
+    (datetime(1950, 4, 1, 0, 0), datetime(1950, 9, 10, 0, 0)),
+    (datetime(1951, 5, 6, 0, 0), datetime(1951, 9, 9, 0, 0)),
+    (datetime(1955, 5, 5, 0, 0), datetime(1955, 9, 9, 0, 0)),
+    (datetime(1956, 5, 20, 0, 0), datetime(1956, 9, 30, 0, 0)),
+    (datetime(1957, 5, 5, 0, 0), datetime(1957, 9, 22, 0, 0)),
+    (datetime(1958, 5, 4, 0, 0), datetime(1958, 9, 21, 0, 0)),
+    (datetime(1959, 5, 3, 0, 0), datetime(1959, 9, 20, 0, 0)),
+    (datetime(1960, 5, 1, 0, 0), datetime(1960, 9, 18, 0, 0)),
+    (datetime(1987, 5, 10, 2, 0), datetime(1987, 10, 11, 3, 0)),
+    (datetime(1988, 5, 8, 2, 0), datetime(1988, 10, 9, 3, 0)),
+]
+STANDARD_1275_PERIODS = [  # 127도30분(UTC+8:30) 표준시 사용 기간
+    (datetime(1908, 4, 1, 0, 0), datetime(1912, 1, 1, 0, 0)),
+    (datetime(1954, 3, 21, 0, 0), datetime(1961, 8, 10, 0, 0)),
+]
+
+
+def is_dst_period(civil_dt) -> bool:
+    return any(start <= civil_dt < end for start, end in DST_PERIODS)
+
+
+def standard_utc_offset_for(civil_dt) -> float:
+    """해당 시점 한국의 실제 공식 표준시 UTC 오프셋 (평상시 9, 127도30분 기간엔 8.5)."""
+    if any(start <= civil_dt < end for start, end in STANDARD_1275_PERIODS):
+        return 8.5
+    return 9.0
+
+
+def correct_birth_datetime(civil_dt, longitude: float = 126.978, use_solar_time: bool = True):
+    """시계에 적힌 출생시각(civil_dt)을 서머타임+표준시 기준 변경까지 반영해 보정.
+
+    1) 서머타임 기간이면 1시간 빼서 당시 공식 표준시로 환산
+    2) use_solar_time=True면, 그 시점의 실제 표준경도(127.5 또는 135)를 기준으로
+       진태양시 보정(경도 1도당 4분)까지 적용
+    반환: (보정된 datetime, 적용내역 dict)
+    """
+    applied = {"서머타임_보정": False, "표준시_기준": None, "경도보정_분": 0.0}
+
+    dt = civil_dt
+    if is_dst_period(civil_dt):
+        dt = dt - timedelta(hours=1)
+        applied["서머타임_보정"] = True
+
+    std_offset = standard_utc_offset_for(civil_dt)
+    std_longitude = std_offset * 15  # UTC+9→135도, UTC+8.5→127.5도
+    applied["표준시_기준"] = f"UTC+{std_offset} ({std_longitude}도)"
+
+    if use_solar_time:
+        correction_minutes = (longitude - std_longitude) * 4  # 경도 1도=4분
+        dt = dt + timedelta(minutes=correction_minutes)
+        applied["경도보정_분"] = round(correction_minutes, 2)
+
+    return dt, applied
+
+
+# ── 대운(大運) — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ────────────
+# 다른 모듈과 달리 순수 조견표만으로는 계산이 불가능합니다. 대운수(시작 나이)는
+# 생시부터 가장 가까운 절기(節)까지의 정확한 일수(분 단위)가 필요해서, 매년 날짜가
+# 바뀌는 실제 천문 데이터(sajupy의 절기 시각 테이블)에 의존합니다. sajupy가 설치되지
+# 않은 환경에서는 이 함수들이 동작하지 않습니다(다른 모듈은 전부 순수 파이썬만으로 동작).
+# ※ 대운수 계산에 넘기는 birth_dt는 반드시 correct_birth_datetime()을 거친 값이어야 합니다
+#   (서머타임·127도30분 표준시 기간 출생자는 보정 없이 계산하면 대운수가 틀릴 수 있음).
+
+JEOL_NAMES = {"입춘", "경칩", "청명", "입하", "망종", "소서", "입추", "백로", "한로", "입동", "대설", "소한"}
+
+_daewoon_calendar_cache = None
+
+
+def _get_jeol_table():
+    """sajupy 내부 절기 시각 테이블을 '절'(節) 12개만 걸러서 반환 (지연 로딩+캐시)."""
+    global _daewoon_calendar_cache
+    if _daewoon_calendar_cache is not None:
+        return _daewoon_calendar_cache
+    from sajupy import get_saju_calculator
+    calc = get_saju_calculator()
+    df = calc.data
+    jeol = df[df["solar_term_korean"].isin(JEOL_NAMES)].copy()
+    jeol["dt"] = pd.to_datetime(jeol["term_time"].astype("int64").astype(str), format="%Y%m%d%H%M")
+    _daewoon_calendar_cache = jeol
+    return jeol
+
+
+def _nearest_jeol(birth_dt, direction: str):
+    """direction: 'next'(순행용, 다음 절) 또는 'prev'(역행용, 이전 절)."""
+    jeol = _get_jeol_table()
+    if direction == "next":
+        cand = jeol[jeol["dt"] > birth_dt].sort_values("dt")
+    else:
+        cand = jeol[jeol["dt"] < birth_dt].sort_values("dt")
+    if cand.empty:
+        return None
+    row = cand.iloc[0] if direction == "next" else cand.iloc[-1]
+    return row["solar_term_korean"], row["dt"]
+
+
+def _ganji_index(stem: str, branch: str) -> int | None:
+    for i in range(60):
+        if STEM_CHARS[i % 10] == stem and BRANCH_CHARS[i % 12] == branch:
+            return i
+    return None
+
+
+def _ganji_at(index: int) -> str:
+    index %= 60
+    return STEM_CHARS[index % 10] + BRANCH_CHARS[index % 12]
+
+
+def compute_daewoon(fp: dict, civil_birth_dt, gender: str, longitude: float = 126.978,
+                     num_periods: int = 9) -> dict:
+    """대운 방향(순행/역행)·대운수(시작 나이)·대운 간지 순서를 계산.
+
+    fp: modules["fourPillars"]
+    civil_birth_dt: 시계에 적힌 출생 시각 그대로 (datetime) — 보정은 이 함수가 자동으로 함
+        (서머타임 12개 기간 + 1908~1911·1954~1961 127도30분 표준시 기간 + 경도 기반
+        진태양시 보정을 correct_birth_datetime()으로 내부에서 전부 적용).
+    gender: "남" 또는 "여"
+    longitude: 출생지 경도 (기본값 서울)
+    반환: {"방향": "순행"/"역행", "대운수_원값": 9.063, "대운수": 9,
+           "기준절기": ("입춘", datetime), "periods": [{"나이": 9, "간지": "乙丑"}, ...]}
+    """
+    birth_dt, _correction_applied = correct_birth_datetime(civil_birth_dt, longitude=longitude)
+
+    year_p, month_p = fp.get("year"), fp.get("month")
+    if year_p is None or month_p is None:
+        return {}
+    year_stem = _extract_char(year_p.get("skyFull"), STEM_CHARS)
+    month_stem = _extract_char(month_p.get("skyFull"), STEM_CHARS)
+    month_branch = _extract_char(month_p.get("earthFull"), BRANCH_CHARS)
+    if not (year_stem and month_stem and month_branch):
+        return {}
+
+    year_yang = STEM_YINYANG.get(year_stem)
+    is_male = gender in ("남", "남자", "male", "M")
+    forward = (is_male and year_yang) or (not is_male and not year_yang)
+
+    direction = "next" if forward else "prev"
+    jeol = _nearest_jeol(birth_dt, direction)
+    if jeol is None:
+        return {}
+    jeol_name, jeol_dt = jeol
+    days = abs((jeol_dt - birth_dt).total_seconds()) / 86400
+    daewoon_su_raw = days / 3
+    daewoon_su = round(daewoon_su_raw)
+
+    month_idx = _ganji_index(month_stem, month_branch)
+    if month_idx is None:
+        return {}
+    step = 1 if forward else -1
+
+    PILLAR_KR_BARE = {"year": "연", "month": "월", "day": "일", "hour": "시"}
+    periods = []
+    for i in range(1, num_periods + 1):
+        ganji = _ganji_at(month_idx + step * i)
+        dw_stem, dw_branch = ganji[0], ganji[1]
+        age = daewoon_su + (i - 1) * 10
+
+        interactions = {name: [] for name in ("천간합", "육합", "충", "형", "파", "해")}
+        for key in ("year", "month", "day", "hour"):
+            p = fp.get(key)
+            if p is None:
+                continue
+            s = _extract_char(p.get("skyFull"), STEM_CHARS)
+            b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+            _accumulate_ganji_interaction(interactions, PILLAR_KR_BARE[key], s, b, dw_stem, dw_branch)
+
+        periods.append({"나이": age, "간지": ganji, "충돌": interactions})
+
+    return {
+        "방향": "순행" if forward else "역행",
+        "대운수_원값": round(daewoon_su_raw, 3),
+        "대운수": daewoon_su,
+        "기준절기": (jeol_name, jeol_dt),
+        "periods": periods,
+    }
+
+
+def format_daewoon(dw: dict) -> str:
+    if not dw:
+        return "  (계산 불가 — sajupy 미설치 또는 데이터 부족)"
+    jeol_name, jeol_dt = dw["기준절기"]
+    lines = [
+        f"  방향: {dw['방향']} (기준절기: {jeol_name} {jeol_dt.strftime('%Y-%m-%d %H:%M')})",
+        f"  대운수: {dw['대운수']}세 (원값 {dw['대운수_원값']})",
+    ]
+    for p in dw["periods"]:
+        detail = []
+        for name in ("천간합", "육합", "충", "형", "파", "해"):
+            items = p["충돌"].get(name, [])
+            if items:
+                detail.append(f"{name}:" + "/".join(items))
+        detail_str = " — " + "; ".join(detail) if detail else ""
+        lines.append(f"    {p['나이']}세~ : {p['간지']}{detail_str}")
+    return "\n".join(lines)
+
+
+# ── 세운(歲運) — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ────────────
+# 연주 자체는 순수 공식(60갑자 주기, 서기 4년=갑자년 기준)만으로 계산 가능해 sajupy 불필요.
+# 다만 "어느 날짜가 어느 해의 세운에 속하는지"는 입춘 경계가 필요해 그 판정에서만 sajupy 사용.
+
+
+def compute_year_ganji(year: int) -> str:
+    """서기 연도(사주상 연도, 입춘 기준)의 60갑자 연주. 서기 4년=甲子년 기준 공식."""
+    s = STEM_CHARS[(year - 4) % 10]
+    b = BRANCH_CHARS[(year - 4) % 12]
+    return s + b
+
+
+def sewoon_year_for_date(dt) -> int:
+    """실제 날짜 dt가 사주상 몇 년도 세운에 속하는지 판정 (입춘 이전이면 전년도).
+
+    sajupy 절기 데이터 필요 — 구할 수 없으면 단순히 dt.year 반환(근사치, 1~2월만 부정확할 수 있음).
+    """
+    try:
+        jeol = _get_jeol_table()
+        ipchun = jeol[(jeol["solar_term_korean"] == "입춘") & (jeol["dt"].dt.year == dt.year)]
+        if not ipchun.empty:
+            ipchun_dt = ipchun.iloc[0]["dt"]
+            return dt.year if dt >= ipchun_dt else dt.year - 1
+    except Exception:
+        pass
+    return dt.year  # 근사치 폴백
+
+
+def format_sewoon(se_stem: str, se_branch: str) -> str:
+    return f"  세운 간지: {se_stem}{se_branch}"
+
+
+# ── 자시(子時) 정책 — 지니님 결정: 조자시/야자시 구분 없이 통합해서 씀 (최근 대세) ──
+# 23:00~24:00 출생자는 조자시/야자시를 나누지 않고, 23시부터 이미 다음날 자시로
+# 하나로 취급합니다. sajupy 호출 시 early_zi_time=False로 고정.
+# 원국을 sajupy로 직접 계산하게 될 때(현재는 SAZU API 사용 중) 이 상수를 그대로 넘기세요.
+EARLY_ZI_TIME = False
+
+
+# ── 월운(月運) — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ────────────
+# 월주 자체는 오호둔(五虎遁) 공식으로 직접 계산도 가능하지만(2026년 5개 날짜로 sajupy와
+# 교차검증 완료, 전부 일치), 절기 경계 판정까지 다시 구현하는 중복을 피하려고
+# sajupy.calculate_saju()를 그대로 호출해 월주를 가져옵니다. sajupy 필요.
+
+
+def compute_wolwoon_ganji(target_dt) -> tuple[str, str] | None:
+    """target_dt(해당 월의 아무 날, 정오 권장)의 월운 간지(월주)를 sajupy로 계산.
+
+    정오(12시) 계산이라 EARLY_ZI_TIME 정책은 영향 없음 — 자시 근처가 아니므로.
+    """
+    try:
+        from sajupy import calculate_saju
+        r = calculate_saju(
+            year=target_dt.year, month=target_dt.month, day=target_dt.day,
+            hour=12, minute=0, use_solar_time=False, early_zi_time=EARLY_ZI_TIME,
+        )
+        return r["month_stem"], r["month_branch"]
+    except Exception:
+        return None
+
+
+def _accumulate_ganji_interaction(result: dict, label: str, s: str | None, b: str | None, t_stem: str, t_branch: str):
+    """공통 로직: (s,b) 기둥과 (t_stem,t_branch) 대상 사이의 합·충·형·파·해를 result에 누적.
+
+    대운의 원국 대조에 사용 (세운·월운은 관계분석 없이 간지만 표시하기로 함).
+    """
+    if s:
+        pair = frozenset({s, t_stem})
+        if pair in STEM_HAP:
+            _, name = STEM_HAP[pair]
+            result["천간합"].append(f"{label}간({s}) {name}")
+    if b:
+        pair = frozenset({b, t_branch})
+        if pair in BRANCH_YUKHAP:
+            _, name = BRANCH_YUKHAP[pair]
+            result["육합"].append(f"{label}지({b}) {name}")
+        if pair in CHUNG_PAIRS:
+            result["충"].append(f"{label}지({b}) {CHUNG_PAIRS[pair]}")
+        if pair in PA_PAIRS:
+            result["파"].append(f"{label}지({b}) {PA_PAIRS[pair]}")
+        if pair in HAE_PAIRS:
+            result["해"].append(f"{label}지({b}) {HAE_PAIRS[pair]}")
+        if pair in DOUBLE_HYEONG:
+            result["형"].append(f"{label}지({b}) {DOUBLE_HYEONG[pair]}")
+        if b == t_branch and b in SELF_HYEONG_BRANCHES:
+            result["형"].append(f"{label}지({b}) 자형({b}{b})")
+
+
+def format_wolwoon(wo_stem: str, wo_branch: str) -> str:
+    return f"  월운 간지: {wo_stem}{wo_branch}"
+
+
+def format_sinsal(sinsal: dict) -> str:
+    lines = []
+    for name in ("역마", "도화", "화개"):
+        by_base = sinsal.get(name, {})
+        found = []
+        for base_label in ("연지기준", "일지기준"):
+            pillars = by_base.get(base_label, [])
+            if pillars:
+                found.append(f"{', '.join(pillars)}[{base_label}]")
+        lines.append(f"  {name}: " + ("있음 (" + "; ".join(found) + ")" if found else "없음"))
+    pillars = sinsal.get("천을귀인", [])
+    lines.append("  천을귀인: " + ("있음 (" + ", ".join(pillars) + ")" if pillars else "없음"))
+    return "\n".join(lines)
+
+
+# ── 지니님 사주첩경 요약 자료 — 신살/격국/육친 판정에 따라 조건부로만 포함 ──────
+# 폴더 구조: references/sinsal/<신살명>.md, references/gyeokguk/{general,종격}.md,
+#            references/yukchin/general.md — 파일이 없으면 조용히 건너뜀(에러 없음).
+REFERENCES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "references")
+
+
+def _load_ref(*parts: str) -> str | None:
+    path = os.path.join(REFERENCES_DIR, *parts)
+    if os.path.isfile(path):
+        text = open(path, encoding="utf-8").read().strip()
+        return text or None
+    return None
+
+
+def _sinsal_found(sinsal: dict, name: str) -> bool:
+    """name에 해당하는 신살이 (연지기준이든 일지기준이든) 하나라도 있으면 True."""
+    value = sinsal.get(name)
+    if isinstance(value, dict):  # 역마·도화·화개: {"연지기준": [...], "일지기준": [...]}
+        return any(value.get(base) for base in ("연지기준", "일지기준"))
+    return bool(value)  # 천을귀인: 리스트
+
+
+def collect_references(sinsal: dict, sin_strength_score: float | None) -> str:
+    """이 사주에 실제로 해당하는 참고자료만 골라서 반환. 관련 없는 자료는 아예 포함하지 않음."""
+    blocks = []
+
+    for name in ("역마", "도화", "천을귀인", "화개"):
+        if _sinsal_found(sinsal, name):
+            text = _load_ref("sinsal", f"{name}.md")
+            if text:
+                blocks.append(f"### [신살] {name}\n{text}")
+
+    gen = _load_ref("gyeokguk", "general.md")
+    if gen:
+        blocks.append(f"### [격국] 총론\n{gen}")
+
+    # 신강신약 점수가 극단(0~20 또는 80~100)일 때만 종격 판단 기준 추가
+    if sin_strength_score is not None and (sin_strength_score <= 20 or sin_strength_score >= 80):
+        jong = _load_ref("gyeokguk", "종격.md")
+        if jong:
+            blocks.append(f"### [격국] 종격 판단 기준\n{jong}")
+
+    yuk = _load_ref("yukchin", "general.md")
+    if yuk:
+        blocks.append(f"### [육친] 총론\n{yuk}")
+
+    return "\n\n".join(blocks)
 
 
 # ── SAZU API ──────────────────────────────────────────────────────────────
@@ -217,16 +1216,25 @@ def format_sazu_context(body: dict) -> str:
                      f"12운성={d['twelveFortune']['name']}")
     lines.append(f"  방향: {modules['decadeFortune']['direction']} / 시작연령 {modules['decadeFortune']['startAge']}세")
 
+    lines.append("\n[신살 — 결정적 계산 결과 (역마·도화·화개: 연지 삼합 기준 / 천을귀인: 일간 기준)]")
+    sinsal_result = compute_sinsal(fp)
+    lines.append(format_sinsal(sinsal_result))
+
+    refs = collect_references(sinsal_result, ss.get("score"))
+    if refs:
+        lines.append("\n[지니님 사주첩경 요약 — 이 사주에 해당하는 부분만 적용]")
+        lines.append(refs)
+
     # Pro 전용 모듈 — 발급된 경우에만 원문 그대로 첨부(무료 플랜은 비어있음)
     pro_keys = ["gyeokguk", "yongsin", "sinsal", "relationships", "ghostElements", "seun", "weolun", "wongukInteraction", "evaluation"]
     pro_data = {k: modules[k] for k in pro_keys if k in modules}
     if pro_data:
         import json
         lines.append("\n[SAZU API 제공 — 격국/용신/신살 등 상세 원본 데이터]")
-        lines.append(json.dumps(pro_data, ensure_ascii=False, indent=1))
+        lines.append(json.dumps(pro_data, ensure_ascii=False, separators=(",", ":")))
     else:
-        lines.append(f"\n[안내] 현재 플랜({meta.get('tier')})에서는 격국·용신·신살 모듈이 제공되지 않습니다."
-                      " 위 원국·대운·오행 데이터만으로 아래 항목을 직접 추론해 분석하십시오.")
+        lines.append(f"\n[안내] 현재 플랜({meta.get('tier')})에서는 격국·용신 모듈이 제공되지 않습니다."
+                      " 신살은 위에 이미 정확히 계산되어 있으니, 격국·용신만 원국·대운·오행 데이터로 직접 추론하십시오.")
 
     return "\n".join(lines)
 
@@ -237,6 +1245,7 @@ def make_prompt(body: dict, gender_label: str) -> str:
 
     return f"""당신은 사주첩경(四柱捷徑)의 저자 이석영 선생과 자평진전(子平眞詮)에 정통한 명리학자입니다.
 아래 SAZU 만세력 API가 정밀 계산한 사주 데이터를 근거로 삼아, 재계산 없이 그대로 인용하며 해석만 하십시오.
+【 지니님 사주첩경 요약 】이 컨텍스트에 포함되어 있으면, 그 판단 기준을 일반 명리 지식보다 최우선으로 따르십시오. 실제 원문을 인용하는 것처럼 문장을 지어내지 말고, 판단 기준으로만 활용해 당신의 말로 풀이하십시오.
 
 ═══════════════════════════════════════
 【 SAZU 계산 결과 】
@@ -248,11 +1257,12 @@ def make_prompt(body: dict, gender_label: str) -> str:
 
 ▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준)을 2~3문장으로.
 ▶ 2. 대운(大運) 해석: 현재·다음 대운 위주로 길흉과 그 이유를 2~3문장으로.
-▶ 3. 신살(神殺): SAZU 데이터에 신살 모듈이 없으면 연지·일지 기준 조견표로 직접 추론하라. 역마·도화·천을귀인·화개 중 원국에 있는 것만 골라 현대적 의미로 2~3문장으로.
+▶ 3. 신살(神殺): 위 [신살 — 결정적 계산 결과]를 그대로 인용하라 (재계산·추가 추론 금지). "있음"인 항목만 현대적 의미로 2~3문장으로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 1문장으로 끝내라.
 ▶ 4. 격국(格局): 기본은 정격(正格)이다. 신강신약이 극단적이고 오행이 한쪽으로 쏠렸을 때만 종격(從格)을 검토하고, 그 외에는 "정격, 1번의 용신을 따름"이라고 1문장으로 끝내라.
-▶ 종합 총평: 핵심 테마와 조언을 2~3문장으로. {gender_label}성 배우자성({spouse_star}) 관련 한 줄 포함. 자평진전/사주첩경 한 구절 인용으로 마무리.
+▶ 종합 총평: 핵심 테마와 조언을 2~3문장으로. {gender_label}성 배우자성({spouse_star}) 관련 한 줄 포함.
 
-※ 한국어, 전문 용어는 한자 병기. 항목 제목 외의 수식어·서론은 생략하고 바로 본문으로 들어가십시오."""
+※ 한국어, 전문 용어는 한자 병기. 항목 제목 외의 수식어·서론은 생략하고 바로 본문으로 들어가십시오.
+※ 사주첩경·자평진전 등 원문에 실제로 없는 문장을 지어내 따옴표로 인용하지 마십시오. 원리를 설명할 때는 "~라는 원칙에 따라"처럼 서술하고, 직접 인용 형식은 쓰지 마십시오."""
 
 
 def call_gemini_stream(prompt: str):
@@ -262,7 +1272,7 @@ def call_gemini_stream(prompt: str):
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             temperature=0.8,
-            max_output_tokens=4096,
+            max_output_tokens=2048,
             thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
         ),
     ):
@@ -330,6 +1340,16 @@ if body:
     modules = body["data"]["modules"]
     gender_label = st.session_state["gender_label"]
 
+    inp = body["data"]["input"]
+    _cal = "음력" if inp.get("isLunar") else "양력"
+    _leap_note = " 🔸윤달" if inp.get("isLunar") and inp.get("isLeapMonth") else ""
+    _time_note = f"{inp['birthHour']:02d}:{inp.get('birthMinute', 0):02d}" if inp.get("birthHour") is not None else "시간미상"
+    st.info(
+        f"**입력 확인**: {inp['birthYear']}년 {inp['birthMonth']}월 {inp['birthDay']}일"
+        f" ({_cal}{_leap_note}) {_time_note} · {'여성' if inp['isFemale'] else '남성'}"
+        + ("  \n⚠️ 윤달로 입력하셨습니다 — 평달이 맞는지 다시 한 번 확인해주세요." if _leap_note else "")
+    )
+
     st.divider()
     st.subheader("사주팔자 원국")
     cols = st.columns(4)
@@ -365,6 +1385,46 @@ if body:
     st.caption(f"{dw['direction']} · {dw['startAge']}세부터 시작 · 기준 절기: {dw.get('basisTermsName', '-')}")
     cur_age = modules.get("summary", {}).get("fortunePhase", {}).get("current", {}).get("age")
     st.dataframe(daewoon_dataframe(dw, cur_age), width='stretch', hide_index=True)
+
+    st.divider()
+    st.subheader("🔧 확장 분석 — 자체 계산 (검증용)")
+    st.caption(
+        "SAZU와 무관하게 지니님 코드로 직접 계산한 결과입니다. "
+        "원광만세력·루시아만세력과 대조해서 정확도를 확인해주세요. "
+        "AI 해석 프롬프트에는 아직 반영되지 않았습니다(신살 4종만 예외)."
+    )
+    tab1, tab2, tab3, tab4 = st.tabs(["신살", "형충파해", "십성·12운성", "지장간·납음오행"])
+
+    with tab1:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**역마·도화·화개·천을귀인**")
+            st.text(format_sinsal(compute_sinsal(fp)))
+        with c2:
+            st.markdown("**문창귀인·암록·금여·양인·괴강·백호·원진·공망**")
+            st.text(format_sinsal_extended(compute_sinsal_extended(fp)))
+
+    with tab2:
+        st.markdown("**천간합·육합·삼합·반합·방합·충·형·파·해**")
+        st.text(format_hyeongchunghae(compute_hyeongchunghae(fp)))
+
+    with tab3:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**십성**")
+            st.text(format_sipseong(compute_sipseong(fp)))
+        with c2:
+            st.markdown("**12운성**")
+            st.text(format_twelve_stages(compute_twelve_stages(fp)))
+
+    with tab4:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**지장간(여기·중기·정기)**")
+            st.text(format_jijanggan(compute_jijanggan(fp)))
+        with c2:
+            st.markdown("**납음오행**")
+            st.text(format_nayin(compute_nayin(fp)))
 
     tier = body["meta"].get("tier")
     if tier == "free":
