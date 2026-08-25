@@ -1100,36 +1100,93 @@ def _char_elem_bg_color(ch: str, is_stem: bool) -> tuple[str, str]:
     return ELEMENT_BG.get(elem, "#eeeeee"), ELEMENT_TEXT_ON_BG.get(elem, "#000000")
 
 
+SINSAL_HANJA = {
+    "역마": "驛馬", "도화": "桃花", "화개": "華蓋", "천을귀인": "天乙",
+    "문창귀인": "文昌", "암록": "暗祿", "금여": "金輿", "양인살": "羊刃",
+    "괴강살": "魁罡", "백호살": "白虎", "원진살": "怨嗔", "공망": "空亡",
+}
+
+
+def sinsal_hanja_by_pillar(fp: dict) -> dict:
+    """신살을 연지·월지·일지·시지 기둥별로 묶어 한자 태그로 반환.
+
+    반환: {"연지": ["驛馬","空亡"], "월지": [...], "일지": [...], "시지": [...]}
+    """
+    result = {"연지": [], "월지": [], "일지": [], "시지": []}
+
+    sinsal = compute_sinsal(fp)
+    for name in ("역마", "도화", "화개"):
+        by_base = sinsal.get(name, {})
+        for base in ("연지기준", "일지기준"):
+            for pillar_label in by_base.get(base, []):
+                if pillar_label in result:
+                    result[pillar_label].append(SINSAL_HANJA[name])
+    for pillar_label in sinsal.get("천을귀인", []):
+        if pillar_label in result:
+            result[pillar_label].append(SINSAL_HANJA["천을귀인"])
+
+    ext = compute_sinsal_extended(fp)
+    for name in ("문창귀인", "암록", "금여", "양인살", "공망"):
+        for item in ext.get(name, []):
+            for key in result:
+                if item.startswith(key):  # 공망은 "연지(亥)"처럼 지지값이 뒤에 붙어 나옴
+                    result[key].append(SINSAL_HANJA[name])
+                    break
+
+    zhu_to_ji = {"연주": "연지", "월주": "월지", "일주": "일지", "시주": "시지"}
+    for name in ("괴강살", "백호살"):
+        for zhu_label in ext.get(name, []):
+            ji_label = zhu_to_ji.get(zhu_label)
+            if ji_label:
+                result[ji_label].append(SINSAL_HANJA[name])
+
+    for item in ext.get("원진살", []):
+        prefix = item.split(" ")[0]  # 예: "연지-월지"
+        for key in result:
+            if key in prefix:
+                result[key].append(SINSAL_HANJA["원진살"])
+
+    return result
+
+
 def render_saju_dashboard_table(fp: dict):
-    """시-일-월-연 순서로 십성·간지·지장간·오행분포를 압축 표 하나로 렌더링."""
+    """시-일-월-연 순서로 십성·간지·신살·지장간·오행분포를 압축 표 하나로 렌더링."""
     order = ["hour", "day", "month", "year"]
     sipseong = compute_sipseong(fp)
     jjg = compute_jijanggan(fp)
+    sinsal_by_pillar = sinsal_hanja_by_pillar(fp)
     stem_label = {"hour": "시간", "day": "일간", "month": "월간", "year": "연간"}
     branch_label = {"hour": "시지", "day": "일지", "month": "월지", "year": "연지"}
 
     def lab(text):
         return f'<td style="text-align:center;font-size:.82rem;padding:4px;color:#555;">{text}</td>'
 
+    def sinsal_cell(tags):
+        text = " ".join(tags) if tags else "-"
+        return (f'<td style="text-align:center;font-size:.78rem;padding:3px;'
+                f'color:#b25a00;font-weight:600;">{text}</td>')
+
     def big(ch, is_stem):
         bg, color = _char_elem_bg_color(ch, is_stem)
         return (f'<td style="background:{bg};color:{color};text-align:center;'
                 f'font-size:1.5rem;font-weight:700;padding:10px 4px;">{ch}</td>')
 
-    top, stems, branches, bottom, jjgs = [], [], [], [], []
+    top, stems, branches, sinsal_row, bottom, jjgs = [], [], [], [], [], []
     elem_count = {"목": 0, "화": 0, "토": 0, "금": 0, "수": 0}
 
     for key in order:
         p = fp.get(key)
         if p is None:
             top.append(lab("-")); stems.append(big("-", True))
-            branches.append(big("-", False)); bottom.append(lab("-")); jjgs.append(lab("-"))
+            branches.append(big("-", False)); sinsal_row.append(sinsal_cell([]))
+            bottom.append(lab("-")); jjgs.append(lab("-"))
             continue
         s = _extract_char(p.get("skyFull"), STEM_CHARS)
         b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
         top.append(lab("일원" if key == "day" else sipseong.get(stem_label[key], "-")))
         stems.append(big(s or "-", True))
         branches.append(big(b or "-", False))
+        sinsal_row.append(sinsal_cell(sinsal_by_pillar.get(branch_label[key], [])))
         bottom.append(lab(sipseong.get(branch_label[key], "-")))
         pairs = jjg.get(branch_label[key], [])
         jjgs.append(lab("".join(st for st, _ in pairs)))
@@ -1146,7 +1203,7 @@ def render_saju_dashboard_table(fp: dict):
     st.markdown(
         f"""<table style="width:100%;border-collapse:collapse;">
 <tr>{''.join(top)}</tr><tr>{''.join(stems)}</tr><tr>{''.join(branches)}</tr>
-<tr>{''.join(bottom)}</tr><tr>{''.join(jjgs)}</tr>
+<tr>{''.join(sinsal_row)}</tr><tr>{''.join(bottom)}</tr><tr>{''.join(jjgs)}</tr>
 </table>
 <table style="width:100%;border-collapse:collapse;margin-top:2px;border-top:1px solid #ddd;">
 <tr>{elem_row}</tr></table>""",
