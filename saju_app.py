@@ -1337,14 +1337,99 @@ def render_hyeongchunghae_summary(fp: dict):
     st.markdown(" · ".join(tags))
 
 
-@st.dialog("🔮 신살 보기")
-def show_sinsal_dialog(fp: dict):
+# ── 월령(月令) — 지장간 여기/중기/정기 중 "지금 정확히 어느 구간인지" 날짜로 계산 ──
+# 월률분야 표준 날짜배분: 생지(寅申巳亥)=7/7/16, 왕지(子卯酉)=10/20(중기없음),
+# 오화특례(午)=10/10/10(중기 己 포함 학파), 고지(辰戌丑未)=9/3/18.
+# 월지에만 적용되는 개념(연지·일지·시지는 날짜 배분 없이 구성만 있음 — 이미 지장간 함수가 그렇게 처리 중).
+BRANCH_CATEGORY = {
+    "寅": "생지", "申": "생지", "巳": "생지", "亥": "생지",
+    "子": "왕지", "卯": "왕지", "酉": "왕지", "午": "오화특례",
+    "辰": "고지", "戌": "고지", "丑": "고지", "未": "고지",
+}
+DAY_ALLOC = {"생지": [7, 7, 16], "왕지": [10, 20], "오화특례": [10, 10, 10], "고지": [9, 3, 18]}
+
+
+def compute_wollyeong(month_branch: str, civil_birth_dt, longitude: float = 126.978):
+    """월지의 지장간 중 출생일이 실제로 어느 구간(여기/중기/정기)에 해당하는지 계산.
+
+    civil_birth_dt: 시계에 적힌 출생시각 그대로(양력 기준) — 내부에서 자동 보정.
+    반환: (천간, 단계, 경과일수, 기준절기명, 기준절기시각) 또는 데이터 부족 시 None.
+    """
+    if month_branch not in BRANCH_CATEGORY:
+        return None
     try:
+        birth_dt, _ = correct_birth_datetime(civil_birth_dt, longitude=longitude)
+        jeol = _nearest_jeol(birth_dt, "prev")
+        if jeol is None:
+            return None
+        jeol_name, jeol_dt = jeol
+        days_elapsed = (birth_dt - jeol_dt).total_seconds() / 86400
+        allocs = DAY_ALLOC[BRANCH_CATEGORY[month_branch]]
+        stems = JIJANGGAN.get(month_branch)
+        if not stems:
+            return None
+        cum = 0
+        for (stem, stage), days in zip(stems, allocs):
+            cum += days
+            if days_elapsed < cum:
+                return stem, stage, round(days_elapsed, 2), jeol_name, jeol_dt
+        return stems[-1][0], stems[-1][1], round(days_elapsed, 2), jeol_name, jeol_dt
+    except Exception:
+        return None
+
+
+def get_solar_birth_datetime(body: dict):
+    """SAZU 입력이 음력이어도 정확한 양력 출생시각을 돌려줌 (월령 등 절기 계산용).
+
+    시간을 모르면 None. 음력이면 sajupy로 변환.
+    """
+    inp = body["data"]["input"]
+    if inp.get("birthHour") is None:
+        return None
+    y, m, d = inp["birthYear"], inp["birthMonth"], inp["birthDay"]
+    if inp.get("isLunar"):
+        try:
+            from sajupy import lunar_to_solar
+            conv = lunar_to_solar(y, m, d, is_leap_month=bool(inp.get("isLeapMonth")))
+            y, m, d = conv["solar_year"], conv["solar_month"], conv["solar_day"]
+        except Exception:
+            return None
+    return datetime(y, m, d, inp["birthHour"], inp.get("birthMinute", 0))
+
+
+@st.dialog("🔮 사주 상세보기")
+def show_sinsal_dialog(fp: dict, body: dict | None = None):
+    try:
+        st.markdown("**사주팔자 원국**")
+        render_saju_dashboard_table(fp)
+
+        st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**12운성**")
+            st.text(format_twelve_stages(compute_twelve_stages(fp)))
+        with c2:
+            st.markdown("**월령(月令)**")
+            month_branch = _extract_char((fp.get("month") or {}).get("earthFull"), BRANCH_CHARS)
+            civil_dt = get_solar_birth_datetime(body) if body else None
+            if month_branch and civil_dt:
+                result = compute_wollyeong(month_branch, civil_dt)
+                if result:
+                    stem, stage, days, jeol_name, jeol_dt = result
+                    st.markdown(f"**{stem}**({stage}) — {jeol_name}로부터 {days}일째")
+                else:
+                    st.caption("계산 불가")
+            else:
+                st.caption("시간 미상이라 계산 불가")
+
+        st.divider()
         st.markdown("**신살** (있는 것만 표시)")
         render_sinsal_badges(fp)
+
         st.divider()
         st.markdown("**충·형·파·해**")
         render_hyeongchunghae_summary(fp)
+
         st.caption("원광만세력·루시아만세력과 대조해보세요.")
     except Exception as e:
         st.exception(e)  # 팝업이 비어 보이는 문제 재발 시 원인을 바로 보여줌
@@ -1717,11 +1802,11 @@ if body:
     fp = modules["fourPillars"]
     with hcol2:
         st.markdown("&nbsp;", unsafe_allow_html=True)
-        if st.button("🔮 신살보기", width='stretch'):
+        if st.button("🔮 상세보기", width='stretch'):
             st.session_state["_open_sinsal_dialog"] = True
 
     if st.session_state.get("_open_sinsal_dialog"):
-        show_sinsal_dialog(fp)
+        show_sinsal_dialog(fp, body)
         st.session_state["_open_sinsal_dialog"] = False
 
     render_saju_dashboard_table(fp)
