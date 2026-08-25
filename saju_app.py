@@ -1267,10 +1267,30 @@ def render_sinsal_badges(fp: dict):
     st.markdown(badge_html, unsafe_allow_html=True)
 
 
+def render_hyeongchunghae_summary(fp: dict):
+    """충·형·파·해만 간단히 요약 (합은 신살 성격이 아니라 제외) — 레퍼런스의 '破(亥寅)' 식 표기."""
+    hch = compute_hyeongchunghae(fp)
+    tags = []
+    for name in ("충", "형", "파", "해"):
+        for item in hch.get(name, []):
+            tags.append(f"{name}({item})")
+    if not tags:
+        st.caption("충·형·파·해 없음")
+        return
+    st.markdown(" · ".join(tags))
+
+
 @st.dialog("🔮 신살 보기")
 def show_sinsal_dialog(fp: dict):
-    render_sinsal_badges(fp)
-    st.caption("있는 신살만 표시됩니다. 원광만세력·루시아만세력과 대조해보세요.")
+    try:
+        st.markdown("**신살** (있는 것만 표시)")
+        render_sinsal_badges(fp)
+        st.divider()
+        st.markdown("**충·형·파·해**")
+        render_hyeongchunghae_summary(fp)
+        st.caption("원광만세력·루시아만세력과 대조해보세요.")
+    except Exception as e:
+        st.exception(e)  # 팝업이 비어 보이는 문제 재발 시 원인을 바로 보여줌
 
 
 def pillar_card(label: str, pillar: dict | None):
@@ -1641,7 +1661,11 @@ if body:
     with hcol2:
         st.markdown("&nbsp;", unsafe_allow_html=True)
         if st.button("🔮 신살보기", width='stretch'):
-            show_sinsal_dialog(fp)
+            st.session_state["_open_sinsal_dialog"] = True
+
+    if st.session_state.get("_open_sinsal_dialog"):
+        show_sinsal_dialog(fp)
+        st.session_state["_open_sinsal_dialog"] = False
 
     render_saju_dashboard_table(fp)
 
