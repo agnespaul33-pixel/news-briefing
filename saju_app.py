@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""사주 분석 대시보드 — SAZU 만세력 API(사주팔자·대운) + Gemini(만당 스타일 해석)
+"""만세력 대시보드 — SAZU 만세력 API(사주팔자·대운) + Gemini(만당 스타일 해석)
 
 참고: 사주첩경(이석영) · 자평진전
 """
@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="사주 분석", page_icon="🔮", layout="wide")
+st.set_page_config(page_title="만세력", page_icon="🔮", layout="wide")
 
 try:
     from dotenv import load_dotenv
@@ -56,10 +56,10 @@ SAZU_MODULES = [
 ELEMENT_ORDER = ["wood", "fire", "earth", "metal", "water"]
 ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "water": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
+PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
 # STEM_ELEMENT/BRANCH_ELEMENT(아래 정의)는 오행을 한자(木火土金水)로 반환하는데,
 # elem_count 등 집계용 딕셔너리는 한글 키(목화토금수)를 쓰므로 여기서 변환한다.
 HANJA_ELEMENT_TO_KR = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
-PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
 
 # ── 신살 조견표 (사주첩경 전통 방식: 역마·도화·화개는 연지 삼합 기준, 천을귀인은 일간 기준) ──
 BRANCH_CHARS = "子丑寅卯辰巳午未申酉戌亥"
@@ -1267,6 +1267,12 @@ def render_sinsal_badges(fp: dict):
     st.markdown(badge_html, unsafe_allow_html=True)
 
 
+@st.dialog("🔮 신살 보기")
+def show_sinsal_dialog(fp: dict):
+    render_sinsal_badges(fp)
+    st.caption("있는 신살만 표시됩니다. 원광만세력·루시아만세력과 대조해보세요.")
+
+
 def pillar_card(label: str, pillar: dict | None):
     if pillar is None:
         st.markdown(f"**{label}**")
@@ -1464,7 +1470,7 @@ def call_gemini_stream(prompt: str):
 
 # ── UI ────────────────────────────────────────────────────────────────────
 
-st.title("🔮 사주 분석")
+st.title("🔮 만세력")
 st.caption("SAZU 만세력 API로 사주팔자·대운을 정밀 계산하고, Gemini가 사주첩경·자평진전 기반으로 해석합니다.")
 
 # ── 시(時) 선택 옵션 — 조자시/야자시/자시(통합) 구분 (원광만세력 등 참고) ──────────
@@ -1627,9 +1633,16 @@ if body:
     )
 
     st.divider()
-    st.subheader("📋 압축 대시보드 — 자체 계산 (검증용)")
-    st.caption("한눈에 보는 원국·대운·세운·월운·신살. SAZU와 별개로 지니님 코드가 직접 계산한 결과입니다.")
+    hcol1, hcol2 = st.columns([4, 1])
+    with hcol1:
+        st.subheader("📋 압축 대시보드 — 자체 계산 (검증용)")
+        st.caption("한눈에 보는 원국·대운·세운·월운. SAZU와 별개로 지니님 코드가 직접 계산한 결과입니다.")
     fp = modules["fourPillars"]
+    with hcol2:
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        if st.button("🔮 신살보기", width='stretch'):
+            show_sinsal_dialog(fp)
+
     render_saju_dashboard_table(fp)
 
     st.markdown("&nbsp;", unsafe_allow_html=True)
@@ -1641,10 +1654,6 @@ if body:
 
     st.markdown("&nbsp;", unsafe_allow_html=True)
     render_wolwoon_strip(datetime.now().year)
-
-    st.markdown("&nbsp;", unsafe_allow_html=True)
-    st.markdown("**신살** (있는 것만 표시)")
-    render_sinsal_badges(fp)
 
     st.divider()
     st.subheader("사주팔자 원국")
