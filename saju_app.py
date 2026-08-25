@@ -56,6 +56,9 @@ SAZU_MODULES = [
 ELEMENT_ORDER = ["wood", "fire", "earth", "metal", "water"]
 ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "water": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
+# STEM_ELEMENT/BRANCH_ELEMENT(아래 정의)는 오행을 한자(木火土金水)로 반환하는데,
+# elem_count 등 집계용 딕셔너리는 한글 키(목화토금수)를 쓰므로 여기서 변환한다.
+HANJA_ELEMENT_TO_KR = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
 PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
 
 # ── 신살 조견표 (사주첩경 전통 방식: 역마·도화·화개는 연지 삼합 기준, 천을귀인은 일간 기준) ──
@@ -1085,6 +1088,185 @@ def call_sazu(payload: dict) -> dict:
 
 # ── 표시용 헬퍼 ───────────────────────────────────────────────────────────
 
+# ── 압축 대시보드(레퍼런스 만세력 앱 스타일) — 원국표 + 대운/세운/월운 가로 스트립 + 신살 배지 ──
+ELEMENT_BG = {"목": "#c8e6c9", "화": "#f8bbd0", "토": "#fff59d", "금": "#f5f5f5", "수": "#616161"}
+ELEMENT_TEXT_ON_BG = {"수": "#ffffff"}  # 수(水)는 배경이 어두워 흰 글씨, 나머진 기본 검정
+HIGHLIGHT_COLOR = "#ff8a3d"
+
+
+def _char_elem_bg_color(ch: str, is_stem: bool) -> tuple[str, str]:
+    elem_hanja = STEM_ELEMENT.get(ch) if is_stem else BRANCH_ELEMENT.get(ch)
+    elem = HANJA_ELEMENT_TO_KR.get(elem_hanja)
+    return ELEMENT_BG.get(elem, "#eeeeee"), ELEMENT_TEXT_ON_BG.get(elem, "#000000")
+
+
+def render_saju_dashboard_table(fp: dict):
+    """시-일-월-연 순서로 십성·간지·지장간·오행분포를 압축 표 하나로 렌더링."""
+    order = ["hour", "day", "month", "year"]
+    sipseong = compute_sipseong(fp)
+    jjg = compute_jijanggan(fp)
+    stem_label = {"hour": "시간", "day": "일간", "month": "월간", "year": "연간"}
+    branch_label = {"hour": "시지", "day": "일지", "month": "월지", "year": "연지"}
+
+    def lab(text):
+        return f'<td style="text-align:center;font-size:.82rem;padding:4px;color:#555;">{text}</td>'
+
+    def big(ch, is_stem):
+        bg, color = _char_elem_bg_color(ch, is_stem)
+        return (f'<td style="background:{bg};color:{color};text-align:center;'
+                f'font-size:1.5rem;font-weight:700;padding:10px 4px;">{ch}</td>')
+
+    top, stems, branches, bottom, jjgs = [], [], [], [], []
+    elem_count = {"목": 0, "화": 0, "토": 0, "금": 0, "수": 0}
+
+    for key in order:
+        p = fp.get(key)
+        if p is None:
+            top.append(lab("-")); stems.append(big("-", True))
+            branches.append(big("-", False)); bottom.append(lab("-")); jjgs.append(lab("-"))
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        top.append(lab("일원" if key == "day" else sipseong.get(stem_label[key], "-")))
+        stems.append(big(s or "-", True))
+        branches.append(big(b or "-", False))
+        bottom.append(lab(sipseong.get(branch_label[key], "-")))
+        pairs = jjg.get(branch_label[key], [])
+        jjgs.append(lab("".join(st for st, _ in pairs)))
+        if s and s in STEM_ELEMENT:
+            elem_count[HANJA_ELEMENT_TO_KR[STEM_ELEMENT[s]]] += 1
+        if b and b in BRANCH_ELEMENT:
+            elem_count[HANJA_ELEMENT_TO_KR[BRANCH_ELEMENT[b]]] += 1
+
+    elem_row = "".join(
+        f'<td style="text-align:center;font-size:.82rem;padding:4px;">{e}({elem_count[e]})</td>'
+        for e in ("목", "화", "토", "금", "수")
+    )
+
+    st.markdown(
+        f"""<table style="width:100%;border-collapse:collapse;">
+<tr>{''.join(top)}</tr><tr>{''.join(stems)}</tr><tr>{''.join(branches)}</tr>
+<tr>{''.join(bottom)}</tr><tr>{''.join(jjgs)}</tr>
+</table>
+<table style="width:100%;border-collapse:collapse;margin-top:2px;border-top:1px solid #ddd;">
+<tr>{elem_row}</tr></table>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_horizontal_strip(rows: list[tuple[str, str, str, str]], current_index: int | None, title: str):
+    """rows: [(상단라벨, 천간, 지지, 하단라벨), ...] 왼쪽→오른쪽 표시 순서 그대로."""
+    if not rows:
+        st.caption(f"{title}: 표시할 데이터 없음")
+        return
+    top, stems, branches, bottom = [], [], [], []
+    for i, (t, s, b, bt) in enumerate(rows):
+        hl = f"background:{HIGHLIGHT_COLOR};color:#fff;" if i == current_index else ""
+        border = f"border:2px solid {HIGHLIGHT_COLOR};" if i == current_index else ""
+        top.append(f'<td style="text-align:center;font-size:.78rem;padding:2px;white-space:nowrap;{hl}">{t}</td>')
+        s_bg, s_c = _char_elem_bg_color(s, True) if s in STEM_CHARS else ("#eee", "#000")
+        b_bg, b_c = _char_elem_bg_color(b, False) if b in BRANCH_CHARS else ("#eee", "#000")
+        stems.append(f'<td style="background:{s_bg};color:{s_c};text-align:center;font-weight:700;padding:6px 3px;{border}">{s}</td>')
+        branches.append(f'<td style="background:{b_bg};color:{b_c};text-align:center;font-weight:700;padding:6px 3px;{border}">{b}</td>')
+        bottom.append(f'<td style="text-align:center;font-size:.78rem;padding:2px;white-space:nowrap;{hl}">{bt}</td>')
+    st.markdown(f"**{title}**")
+    st.markdown(
+        f"""<div style="overflow-x:auto;"><table style="border-collapse:collapse;min-width:100%;">
+<tr>{''.join(top)}</tr><tr>{''.join(stems)}</tr><tr>{''.join(branches)}</tr><tr>{''.join(bottom)}</tr>
+</table></div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_daewoon_strip_from_sazu(dw_module: dict, current_age: int | None):
+    """SAZU의 decadeFortune 모듈을 그대로 압축 스트립으로 표시.
+
+    자체 compute_daewoon()은 정확한 양력 시각이 필요한데, SAZU 입력은 음력일 수 있어
+    (inp 필드가 음력 그대로일 가능성) 여기서는 SAZU가 이미 음양력 변환까지 마친
+    decadeFortune 데이터를 그대로 재사용합니다. compute_daewoon()은 별도로 이미
+    회귀 테스트로 검증돼 있으니, 정확한 양력 출생시각이 확보되면 그쪽으로 교체 가능.
+    """
+    items = dw_module.get("list", [])
+    if not items:
+        st.caption("대운: 표시할 데이터 없음")
+        return
+    display = list(reversed(items))  # 레퍼런스처럼 나이 큰 것을 왼쪽에
+    current_idx = None
+    for i, item in enumerate(display):
+        if current_age is not None and item["startAge"] <= current_age < item["startAge"] + 10:
+            current_idx = i
+            break
+    # item["full"]은 SAZU가 한글로 주는 간지 표시문자열(예: "계미") — 색상 조회는 한자
+    # 기준(STEM_CHARS/BRANCH_CHARS)이므로 한글→한자로 변환해서 넘긴다.
+    rows = [
+        (
+            str(item["startAge"]),
+            STEM_HANGUL_TO_HANJA.get(item["full"][0], item["full"][0]),
+            BRANCH_HANGUL_TO_HANJA.get(item["full"][1], item["full"][1]),
+            "",
+        )
+        for item in display
+    ]
+    render_horizontal_strip(
+        rows, current_idx,
+        f"대운(大運) — {dw_module.get('direction', '')} · {dw_module.get('startAge', '?')}세부터",
+    )
+
+
+def render_sewoon_strip(birth_year: int, span_before: int = 4, span_after: int = 7):
+    this_year = datetime.now().year
+    years = list(range(this_year + span_after, this_year - span_before - 1, -1))  # 내림차순
+    current_idx = years.index(this_year) if this_year in years else None
+    rows = []
+    for y in years:
+        ganji = compute_year_ganji(y)
+        age = y - birth_year + 1  # 세는나이
+        rows.append((str(y), ganji[0], ganji[1], f"{age}세"))
+    render_horizontal_strip(rows, current_idx, "세운(歲運)")
+
+
+def render_wolwoon_strip(year: int):
+    months = list(range(12, 0, -1))  # 내림차순
+    this_month = datetime.now().month if datetime.now().year == year else None
+    current_idx = months.index(this_month) if this_month in months else None
+    rows = []
+    for m in months:
+        wo = compute_wolwoon_ganji(datetime(year, m, 15))
+        if wo is None:
+            continue
+        rows.append((f"{m}월", wo[0], wo[1], ""))
+    render_horizontal_strip(rows, current_idx, f"월운(月運) — {year}년")
+
+
+def render_sinsal_badges(fp: dict):
+    """있는 신살만 배지로 표시 (없는 항목은 아예 표시 안 함)."""
+    sinsal = compute_sinsal(fp)
+    ext = compute_sinsal_extended(fp)
+    badges = []
+    for name in ("역마", "도화", "화개"):
+        by_base = sinsal.get(name, {})
+        for base_label in ("연지기준", "일지기준"):
+            pillars = by_base.get(base_label, [])
+            if pillars:
+                badges.append(f"{name}({','.join(pillars)}·{base_label})")
+    if sinsal.get("천을귀인"):
+        badges.append(f"천을귀인({','.join(sinsal['천을귀인'])})")
+    for name in ("문창귀인", "암록", "금여", "양인살", "괴강살", "백호살", "원진살", "공망"):
+        items = ext.get(name, [])
+        if items:
+            badges.append(f"{name}({'; '.join(items)})")
+
+    if not badges:
+        st.caption("해당하는 신살 없음")
+        return
+    badge_html = " ".join(
+        f'<span style="display:inline-block;background:#fff3e0;border:1px solid #ffb74d;'
+        f'border-radius:14px;padding:4px 10px;margin:3px 3px 0 0;font-size:.82rem;">{b}</span>'
+        for b in badges
+    )
+    st.markdown(badge_html, unsafe_allow_html=True)
+
+
 def pillar_card(label: str, pillar: dict | None):
     if pillar is None:
         st.markdown(f"**{label}**")
@@ -1285,41 +1467,135 @@ def call_gemini_stream(prompt: str):
 st.title("🔮 사주 분석")
 st.caption("SAZU 만세력 API로 사주팔자·대운을 정밀 계산하고, Gemini가 사주첩경·자평진전 기반으로 해석합니다.")
 
+# ── 시(時) 선택 옵션 — 조자시/야자시/자시(통합) 구분 (원광만세력 등 참고) ──────────
+# 조자시: 00:30~01:30, 당일 그대로 (day_offset=0)
+# 야자시: 23:30~24:00, 당일 저녁 그대로 (day_offset=0)
+# 자시(통합): 23:30~01:30 전체를 "출생 다음날 아침 자시"로 일괄 처리 (day_offset=+1)
+#   — 지니님이 결정하신 "조/야자시 구분 없이 통합"이 이 옵션과 대응합니다. 기본 추천값.
+TIME_OPTIONS = [
+    ("조자시 00:30~01:30", 1, 0, 0),
+    ("축시 01:30~03:30", 2, 30, 0),
+    ("인시 03:30~05:30", 4, 30, 0),
+    ("묘시 05:30~07:30", 6, 30, 0),
+    ("진시 07:30~09:30", 8, 30, 0),
+    ("사시 09:30~11:30", 10, 30, 0),
+    ("오시 11:30~13:30", 12, 30, 0),
+    ("미시 13:30~15:30", 14, 30, 0),
+    ("신시 15:30~17:30", 16, 30, 0),
+    ("유시 17:30~19:30", 18, 30, 0),
+    ("술시 19:30~21:30", 20, 30, 0),
+    ("해시 21:30~23:30", 22, 30, 0),
+    ("야자시 23:30~24:00 (당일 그대로)", 23, 45, 0),
+    ("자시(통합, 추천) 23:30~01:30 — 다음날 아침 자시로 계산", 0, 30, 1),
+]
+TIME_OPTION_LABELS = [t[0] for t in TIME_OPTIONS]
+_DEFAULT_TIME_IDX = TIME_OPTION_LABELS.index("자시(통합, 추천) 23:30~01:30 — 다음날 아침 자시로 계산")
+
+# ── 다중 인물 관리 (세션 상태에 사람별 폼 값 보관, 이름으로 전환) ──────────────────
+if "people" not in st.session_state:
+    st.session_state["people"] = {"사람1": {}}
+if "active_person" not in st.session_state:
+    st.session_state["active_person"] = "사람1"
+
+pcol1, pcol2, pcol3 = st.columns([3, 1, 1])
+with pcol1:
+    active = st.selectbox("인물 선택", list(st.session_state["people"].keys()),
+                           index=list(st.session_state["people"].keys()).index(st.session_state["active_person"]))
+    st.session_state["active_person"] = active
+with pcol2:
+    if st.button("➕ 인원 추가", width='stretch'):
+        n = len(st.session_state["people"]) + 1
+        st.session_state["people"][f"사람{n}"] = {}
+        st.session_state["active_person"] = f"사람{n}"
+        st.rerun()
+with pcol3:
+    if len(st.session_state["people"]) > 1 and st.button("🗑️ 이 인물 삭제", width='stretch'):
+        del st.session_state["people"][st.session_state["active_person"]]
+        st.session_state["active_person"] = list(st.session_state["people"].keys())[0]
+        st.rerun()
+
+saved = st.session_state["people"].get(st.session_state["active_person"], {})
+
 with st.form("saju_form"):
-    c1, c2, c3 = st.columns([1, 2, 1])
+    ncol1, ncol2 = st.columns([3, 1])
+    name = ncol1.text_input("이름", value=saved.get("name", ""))
+    db_no = ncol2.text_input("DB번호", value=saved.get("db_no", ""), help="Notion 연동 시 저장 식별자로 사용 예정")
+
+    c1, c2, c3 = st.columns([1.3, 2, 1])
     with c1:
-        calendar_type = st.radio("달력", ["양력", "음력"], horizontal=True)
-        is_leap = st.checkbox("윤달", disabled=(calendar_type == "양력"))
+        calendar_type = st.radio("달력", ["양력", "음력", "음력윤달"], horizontal=False,
+                                  index=["양력", "음력", "음력윤달"].index(saved.get("calendar_type", "양력")))
     with c2:
         cc1, cc2, cc3 = st.columns(3)
-        year = cc1.number_input("연도", min_value=1900, max_value=2035, value=1995, step=1)
-        month = cc2.selectbox("월", list(range(1, 13)))
-        day = cc3.selectbox("일", list(range(1, 32)))
+        year = cc1.number_input("연도", min_value=1900, max_value=2035, value=saved.get("year", 1995), step=1)
+        month = cc2.selectbox("월", list(range(1, 13)), index=(saved.get("month", 1) - 1))
+        day = cc3.selectbox("일", list(range(1, 32)), index=(saved.get("day", 1) - 1))
     with c3:
-        gender_label = st.radio("성별", ["남", "여"], horizontal=True)
+        gender_label = st.radio("성별", ["남", "여"], horizontal=True,
+                                 index=["남", "여"].index(saved.get("gender_label", "남")))
 
-    time_known = st.checkbox("태어난 시간을 압니다", value=True)
-    hour = minute = None
+    time_known = st.checkbox("태어난 시간을 압니다", value=saved.get("time_known", True))
+    time_idx = day_offset = None
     if time_known:
-        tc1, tc2 = st.columns(2)
-        hour = tc1.selectbox("시 (0~23시)", list(range(24)), index=12)
-        minute = tc2.number_input("분", min_value=0, max_value=59, value=0, step=1)
+        time_idx = st.selectbox("시(時) 입력", range(len(TIME_OPTIONS)),
+                                 format_func=lambda i: TIME_OPTIONS[i][0],
+                                 index=saved.get("time_idx", _DEFAULT_TIME_IDX))
+        st.caption("조자시: 출생 당일 아침 자시 / 야자시: 출생 당일 저녁 자시 / "
+                   "자시(통합): 출생 다음날 아침 자시로 계산됩니다.")
     else:
         st.caption("시간을 모르면 시주(時柱)는 제외하고 계산합니다.")
+
+    birthplace = st.selectbox("출생지 선택", ["대한민국(-30분)"], index=0,
+                               help="현재는 대한민국 고정(경도 보정 -30분 근사). 해외 출생지는 추후 지원 예정.")
 
     submitted = st.form_submit_button("사주 계산하기", type="primary", width='stretch')
 
 if submitted:
+    # 이 인물의 입력값을 세션에 저장해 다음에 이 인물로 돌아와도 유지되게 함
+    st.session_state["people"][st.session_state["active_person"]] = {
+        "name": name, "db_no": db_no, "calendar_type": calendar_type,
+        "year": int(year), "month": int(month), "day": int(day),
+        "gender_label": gender_label, "time_known": time_known, "time_idx": time_idx,
+    }
+
+    birth_year, birth_month, birth_day = int(year), int(month), int(day)
+    hour = minute = None
+    is_lunar_input = calendar_type in ("음력", "음력윤달")
+    if time_known:
+        _, hour, minute, day_offset = TIME_OPTIONS[time_idx]
+        if day_offset:
+            if is_lunar_input:
+                # 음력 날짜에 그냥 +1일 하면 안 됨(음력 3월30일+1일이 양력 3월31일이 되는 식의
+                # 잘못된 계산이 나옴) — sajupy로 먼저 정확히 양력 변환한 뒤 그 양력 날짜를 밀고,
+                # 최종적으로는 양력으로 SAZU에 전달한다.
+                try:
+                    from sajupy import lunar_to_solar
+                    conv = lunar_to_solar(birth_year, birth_month, birth_day,
+                                           is_leap_month=(calendar_type == "음력윤달"))
+                    solar_dt = datetime(conv["solar_year"], conv["solar_month"], conv["solar_day"])
+                    shifted = solar_dt + timedelta(days=day_offset)
+                    birth_year, birth_month, birth_day = shifted.year, shifted.month, shifted.day
+                    is_lunar_input = False  # 변환 완료 — 이후 SAZU에는 양력으로 전달
+                except Exception as e:
+                    st.error(f"음력→양력 변환 실패로 자시(통합) 날짜 이동을 적용하지 못했습니다: {e}"
+                              " 조자시/야자시를 직접 선택해주세요.")
+                    st.stop()
+            else:
+                shifted = datetime(birth_year, birth_month, birth_day) + timedelta(days=day_offset)
+                birth_year, birth_month, birth_day = shifted.year, shifted.month, shifted.day
+
     payload = {
-        "birthYear": int(year),
-        "birthMonth": int(month),
-        "birthDay": int(day),
-        "isLunar": calendar_type == "음력",
+        "birthYear": birth_year,
+        "birthMonth": birth_month,
+        "birthDay": birth_day,
+        "isLunar": is_lunar_input,
         "isFemale": gender_label == "여",
         "modules": SAZU_MODULES,
     }
-    if calendar_type == "음력":
-        payload["isLeapMonth"] = bool(is_leap)
+    if calendar_type == "음력윤달" and is_lunar_input:
+        payload["isLeapMonth"] = True
+    elif calendar_type == "음력" and is_lunar_input:
+        payload["isLeapMonth"] = False
     if time_known:
         payload["birthHour"] = int(hour)
         payload["birthMinute"] = int(minute)
@@ -1351,9 +1627,28 @@ if body:
     )
 
     st.divider()
+    st.subheader("📋 압축 대시보드 — 자체 계산 (검증용)")
+    st.caption("한눈에 보는 원국·대운·세운·월운·신살. SAZU와 별개로 지니님 코드가 직접 계산한 결과입니다.")
+    fp = modules["fourPillars"]
+    render_saju_dashboard_table(fp)
+
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    cur_age_sazu = modules.get("summary", {}).get("fortunePhase", {}).get("current", {}).get("age")
+    render_daewoon_strip_from_sazu(modules["decadeFortune"], cur_age_sazu)
+
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    render_sewoon_strip(inp["birthYear"])  # 참고: inp가 음력이면 나이 라벨이 드물게 ±1 될 수 있음(원국 정확도엔 무관)
+
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    render_wolwoon_strip(datetime.now().year)
+
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    st.markdown("**신살** (있는 것만 표시)")
+    render_sinsal_badges(fp)
+
+    st.divider()
     st.subheader("사주팔자 원국")
     cols = st.columns(4)
-    fp = modules["fourPillars"]
     for col, (key, label) in zip(cols, PILLAR_LABELS):
         with col:
             pillar_card(label, fp.get(key))
