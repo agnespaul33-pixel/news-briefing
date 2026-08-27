@@ -4,6 +4,7 @@
 참고: 사주첩경(이석영) · 자평진전
 """
 
+import json
 import os
 from datetime import datetime, timedelta
 
@@ -1435,6 +1436,186 @@ def show_sinsal_dialog(fp: dict, body: dict | None = None):
         st.exception(e)  # 팝업이 비어 보이는 문제 재발 시 원인을 바로 보여줌
 
 
+# ── Notion 저장/조회/삭제 — 기존 NOTION_TOKEN·NOTION_PAGE_ID(자동화 작업실) 재사용 ──────
+# 데이터베이스가 없으면 그 페이지 아래에 자동으로 생성합니다. 지니님이 노션에서
+# 직접 속성을 만들 필요 없음 — 아래 코드가 처음 저장할 때 알아서 만듭니다.
+NOTION_DB_TITLE = "사주 고객 DB"
+_notion_db_id_cache = None
+
+
+def _get_notion_client():
+    token = _secret("NOTION_TOKEN")
+    if not token:
+        return None
+    try:
+        from notion_client import Client
+        return Client(auth=token)
+    except ImportError:
+        return None
+
+
+def get_or_create_saju_database():
+    """자동화 작업실 페이지(NOTION_PAGE_ID) 아래에서 '사주 고객 DB'를 찾고, 없으면 생성."""
+    global _notion_db_id_cache
+    if _notion_db_id_cache:
+        return _notion_db_id_cache
+    client = _get_notion_client()
+    page_id = _secret("NOTION_PAGE_ID")
+    if client is None or not page_id:
+        return None
+    try:
+        children = client.blocks.children.list(block_id=page_id)
+        for block in children.get("results", []):
+            if block.get("type") == "child_database":
+                title_parts = block.get("child_database", {}).get("title", "")
+                if title_parts == NOTION_DB_TITLE:
+                    _notion_db_id_cache = block["id"]
+                    return block["id"]
+
+        new_db = client.databases.create(
+            parent={"type": "page_id", "page_id": page_id},
+            title=[{"type": "text", "text": {"content": NOTION_DB_TITLE}}],
+            properties={
+                "이름": {"title": {}},
+                "DB번호": {"rich_text": {}},
+                "성별": {"select": {"options": [{"name": "남"}, {"name": "여"}]}},
+                "달력": {"select": {"options": [
+                    {"name": "양력"}, {"name": "음력"}, {"name": "음력윤달"},
+                ]}},
+                "생년월일": {"rich_text": {}},
+                "생시": {"rich_text": {}},
+                "저장일": {"date": {}},
+                "원국JSON": {"rich_text": {}},
+            },
+        )
+        _notion_db_id_cache = new_db["id"]
+        return new_db["id"]
+    except Exception as e:
+        st.error(f"Notion 데이터베이스 준비 실패: {e}")
+        return None
+
+
+def _slim_fp(fp: dict) -> dict:
+    """저장/재로딩에 실제로 필요한 간지(천간·지지)만 남겨 압축. SAZU 원본은 부가정보가 많아
+    사주에 따라 Notion의 2000자 rich_text 제한에 걸릴 수 있어, 필요한 부분만 추림."""
+    slim = {}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p:
+            slim[key] = {"skyFull": p.get("skyFull"), "earthFull": p.get("earthFull")}
+    return slim
+
+
+def save_saju_to_notion(name, db_no, gender_label, calendar_type, birth_str, time_str, fp):
+    client = _get_notion_client()
+    db_id = get_or_create_saju_database()
+    if client is None:
+        return None, "NOTION_TOKEN이 설정되지 않았습니다."
+    if db_id is None:
+        return None, "Notion 데이터베이스를 준비하지 못했습니다."
+    slim_json = json.dumps(_slim_fp(fp), ensure_ascii=False)
+    if len(slim_json) > 1900:  # 여유를 두고 미리 확인 (한도 2000자)
+        return None, f"원국 데이터가 예상보다 커서({len(slim_json)}자) 저장을 건너뜁니다."
+    try:
+        page = client.pages.create(
+            parent={"database_id": db_id},
+            properties={
+                "이름": {"title": [{"text": {"content": name or "(이름없음)"}}]},
+                "DB번호": {"rich_text": [{"text": {"content": db_no or ""}}]},
+                "성별": {"select": {"name": gender_label}},
+                "달력": {"select": {"name": calendar_type}},
+                "생년월일": {"rich_text": [{"text": {"content": birth_str}}]},
+                "생시": {"rich_text": [{"text": {"content": time_str}}]},
+                "저장일": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}},
+                "원국JSON": {"rich_text": [{"text": {"content": slim_json}}]},
+            },
+        )
+        return page["id"], None
+    except Exception as e:
+        return None, str(e)
+
+
+def list_saju_from_notion():
+    client = _get_notion_client()
+    db_id = get_or_create_saju_database()
+    if client is None or db_id is None:
+        return []
+    try:
+        results = client.databases.query(
+            database_id=db_id, sorts=[{"property": "저장일", "direction": "descending"}],
+        )
+        records = []
+        for r in results.get("results", []):
+            props = r["properties"]
+
+            def _text(prop):
+                data = props.get(prop, {})
+                arr = data.get("rich_text") or data.get("title") or []
+                return arr[0]["plain_text"] if arr else ""
+
+            records.append({
+                "id": r["id"],
+                "이름": _text("이름"),
+                "DB번호": _text("DB번호"),
+                "성별": (props.get("성별", {}).get("select") or {}).get("name", ""),
+                "달력": (props.get("달력", {}).get("select") or {}).get("name", ""),
+                "생년월일": _text("생년월일"),
+                "생시": _text("생시"),
+                "저장일": (props.get("저장일", {}).get("date") or {}).get("start", ""),
+                "원국JSON": _text("원국JSON"),
+            })
+        return records
+    except Exception as e:
+        st.error(f"Notion 조회 실패: {e}")
+        return []
+
+
+def archive_saju_record(page_id):
+    client = _get_notion_client()
+    if client is None:
+        return False
+    try:
+        client.pages.update(page_id=page_id, archived=True)
+        return True
+    except Exception as e:
+        st.error(f"삭제 실패: {e}")
+        return False
+
+
+@st.dialog("📂 저장된 사주 DB목록")
+def show_db_list_dialog():
+    try:
+        records = list_saju_from_notion()
+        if not records:
+            st.caption("저장된 기록이 없습니다 (또는 Notion 연결 미설정).")
+            return
+        table_rows = [
+            {"이름": r["이름"], "DB번호": r["DB번호"], "성별": r["성별"],
+             "생년월일": r["생년월일"], "생시": r["생시"], "저장일": r["저장일"]}
+            for r in records
+        ]
+        st.dataframe(pd.DataFrame(table_rows), width='stretch', hide_index=True)
+
+        names = [f"{r['이름']} ({r['생년월일']} {r['생시']})" for r in records]
+        picked = st.selectbox("불러오거나 삭제할 기록 선택", range(len(records)), format_func=lambda i: names[i])
+
+        c1, c2 = st.columns(2)
+        if c1.button("📖 이 기록 불러오기", width='stretch'):
+            try:
+                fp = json.loads(records[picked]["원국JSON"])
+                st.session_state["loaded_fp_from_notion"] = fp
+                st.session_state["loaded_fp_label"] = names[picked]
+                st.rerun()
+            except Exception as e:
+                st.error(f"불러오기 실패: {e}")
+        if c2.button("🗑️ 이 기록 삭제", width='stretch'):
+            if archive_saju_record(records[picked]["id"]):
+                st.success("삭제했습니다.")
+                st.rerun()
+    except Exception as e:
+        st.exception(e)
+
+
 def pillar_card(label: str, pillar: dict | None):
     if pillar is None:
         st.markdown(f"**{label}**")
@@ -1779,6 +1960,26 @@ if submitted:
     st.session_state["gender_label"] = gender_label
     st.session_state.pop("interpretation", None)
 
+if st.session_state.get("loaded_fp_from_notion"):
+    st.divider()
+    lcol1, lcol2 = st.columns([4, 1])
+    with lcol1:
+        st.subheader(f"📂 불러온 기록 — {st.session_state.get('loaded_fp_label', '')}")
+        st.caption("Notion에 저장된 원국만 표시합니다(SAZU 재계산 없음). 대운·세운·월운은 새로 사주를 계산해야 확인 가능합니다.")
+    with lcol2:
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        if st.button("✕ 닫기", width='stretch'):
+            del st.session_state["loaded_fp_from_notion"]
+            st.session_state.pop("loaded_fp_label", None)
+            st.rerun()
+    _loaded_fp = st.session_state["loaded_fp_from_notion"]
+    render_saju_dashboard_table(_loaded_fp)
+    if st.button("🔮 이 기록 상세보기"):
+        st.session_state["_open_loaded_detail_dialog"] = True
+    if st.session_state.get("_open_loaded_detail_dialog"):
+        show_sinsal_dialog(_loaded_fp, None)
+        st.session_state["_open_loaded_detail_dialog"] = False
+
 body = st.session_state.get("sazu_body")
 if body:
     modules = body["data"]["modules"]
@@ -1795,7 +1996,7 @@ if body:
     )
 
     st.divider()
-    hcol1, hcol2 = st.columns([4, 1])
+    hcol1, hcol2, hcol3, hcol4 = st.columns([3, 1, 1, 1])
     with hcol1:
         st.subheader("📋 압축 대시보드 — 자체 계산 (검증용)")
         st.caption("한눈에 보는 원국·대운·세운·월운. SAZU와 별개로 지니님 코드가 직접 계산한 결과입니다.")
@@ -1804,10 +2005,32 @@ if body:
         st.markdown("&nbsp;", unsafe_allow_html=True)
         if st.button("🔮 상세보기", width='stretch'):
             st.session_state["_open_sinsal_dialog"] = True
+    with hcol3:
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        if st.button("💾 저장", width='stretch'):
+            _cal_type = "음력윤달" if (inp.get("isLunar") and inp.get("isLeapMonth")) else ("음력" if inp.get("isLunar") else "양력")
+            _birth_str = f"{inp['birthYear']}-{inp['birthMonth']:02d}-{inp['birthDay']:02d}"
+            _time_str = _time_note
+            _person = st.session_state["people"].get(st.session_state["active_person"], {})
+            _pid, _err = save_saju_to_notion(
+                _person.get("name", ""), _person.get("db_no", ""),
+                "여" if inp["isFemale"] else "남", _cal_type, _birth_str, _time_str, fp,
+            )
+            if _err:
+                st.error(f"저장 실패: {_err}")
+            else:
+                st.success("Notion에 저장했습니다.")
+    with hcol4:
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        if st.button("📂 DB목록", width='stretch'):
+            st.session_state["_open_db_list_dialog"] = True
 
     if st.session_state.get("_open_sinsal_dialog"):
         show_sinsal_dialog(fp, body)
         st.session_state["_open_sinsal_dialog"] = False
+    if st.session_state.get("_open_db_list_dialog"):
+        show_db_list_dialog()
+        st.session_state["_open_db_list_dialog"] = False
 
     render_saju_dashboard_table(fp)
 
