@@ -1455,7 +1455,11 @@ def _get_notion_client():
 
 
 def get_or_create_saju_database():
-    """자동화 작업실 페이지(NOTION_PAGE_ID) 아래에서 '사주 고객 DB'를 찾고, 없으면 생성."""
+    """자동화 작업실 페이지(NOTION_PAGE_ID) 아래에서 '사주 고객 DB'를 찾고, 없으면 생성.
+
+    기존에 이미 만들어진 데이터베이스라도 '사주팔자'(사람이 읽기 편한 텍스트) 속성이
+    없으면 자동으로 추가합니다.
+    """
     global _notion_db_id_cache
     if _notion_db_id_cache:
         return _notion_db_id_cache
@@ -1469,8 +1473,10 @@ def get_or_create_saju_database():
             if block.get("type") == "child_database":
                 title_parts = block.get("child_database", {}).get("title", "")
                 if title_parts == NOTION_DB_TITLE:
-                    _notion_db_id_cache = block["id"]
-                    return block["id"]
+                    db_id = block["id"]
+                    _ensure_saju_property(client, db_id)
+                    _notion_db_id_cache = db_id
+                    return db_id
 
         new_db = client.databases.create(
             parent={"type": "page_id", "page_id": page_id},
@@ -1485,7 +1491,8 @@ def get_or_create_saju_database():
                 "생년월일": {"rich_text": {}},
                 "생시": {"rich_text": {}},
                 "저장일": {"date": {}},
-                "원국JSON": {"rich_text": {}},
+                "사주팔자": {"rich_text": {}},  # 사람이 읽기 편한 표기 (예: 연주:甲辰 월주:乙亥 ...)
+                "원국JSON": {"rich_text": {}},  # 재로딩용 압축 데이터 (읽기 불편, 앱 전용)
             },
         )
         _notion_db_id_cache = new_db["id"]
@@ -1493,6 +1500,16 @@ def get_or_create_saju_database():
     except Exception as e:
         st.error(f"Notion 데이터베이스 준비 실패: {e}")
         return None
+
+
+def _ensure_saju_property(client, db_id: str):
+    """기존 데이터베이스에 '사주팔자' 속성이 없으면 추가."""
+    try:
+        db = client.databases.retrieve(database_id=db_id)
+        if "사주팔자" not in db.get("properties", {}):
+            client.databases.update(database_id=db_id, properties={"사주팔자": {"rich_text": {}}})
+    except Exception:
+        pass  # 속성 추가 실패해도 저장 자체는 계속 시도 (구버전 스키마로라도 동작)
 
 
 def _slim_fp(fp: dict) -> dict:
@@ -1504,6 +1521,21 @@ def _slim_fp(fp: dict) -> dict:
         if p:
             slim[key] = {"skyFull": p.get("skyFull"), "earthFull": p.get("earthFull")}
     return slim
+
+
+def _readable_fp(fp: dict) -> str:
+    """사람이 읽기 편한 사주팔자 텍스트. 예: 연주:甲辰 월주:乙亥 일주:丙寅 시주:庚寅"""
+    labels = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
+    parts = []
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if not p:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if s and b:
+            parts.append(f"{labels[key]}:{s}{b}")
+    return " ".join(parts) if parts else "-"
 
 
 def save_saju_to_notion(name, db_no, gender_label, calendar_type, birth_str, time_str, fp):
@@ -1527,6 +1559,7 @@ def save_saju_to_notion(name, db_no, gender_label, calendar_type, birth_str, tim
                 "생년월일": {"rich_text": [{"text": {"content": birth_str}}]},
                 "생시": {"rich_text": [{"text": {"content": time_str}}]},
                 "저장일": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}},
+                "사주팔자": {"rich_text": [{"text": {"content": _readable_fp(fp)}}]},
                 "원국JSON": {"rich_text": [{"text": {"content": slim_json}}]},
             },
         )
@@ -1562,6 +1595,7 @@ def list_saju_from_notion():
                 "생년월일": _text("생년월일"),
                 "생시": _text("생시"),
                 "저장일": (props.get("저장일", {}).get("date") or {}).get("start", ""),
+                "사주팔자": _text("사주팔자"),
                 "원국JSON": _text("원국JSON"),
             })
         return records
@@ -1590,7 +1624,7 @@ def show_db_list_dialog():
             st.caption("저장된 기록이 없습니다 (또는 Notion 연결 미설정).")
             return
         table_rows = [
-            {"이름": r["이름"], "DB번호": r["DB번호"], "성별": r["성별"],
+            {"이름": r["이름"], "DB번호": r["DB번호"], "성별": r["성별"], "사주팔자": r["사주팔자"],
              "생년월일": r["생년월일"], "생시": r["생시"], "저장일": r["저장일"]}
             for r in records
         ]
@@ -1713,15 +1747,29 @@ def format_sazu_context(body: dict) -> str:
         lines.append(f"[경도·균시차 보정 완료] 보정 시각 {inp['correctedHour']:02d}:{inp['correctedMinute']:02d}"
                       f" — 이미 정밀 계산된 값이므로 시주 재계산 불필요")
 
-    lines.append("\n[사주팔자 원국]")
-    for key, label in (("year", "연주"), ("month", "월주"), ("day", "일주"), ("hour", "시주")):
+    # 아래 십성·12운성·납음·지장간은 SAZU 원본이 아니라 지니님의 자체 엔진 결과입니다.
+    # 실제 만세력 앱 스크린샷과 대조해 정확도를 검증한 값이라 이쪽을 신뢰합니다.
+    sipseong = compute_sipseong(fp)
+    stages = compute_twelve_stages(fp)
+    nayin = compute_nayin(fp)
+    jjg = compute_jijanggan(fp)
+    stem_label = {"year": "연간", "month": "월간", "day": "일간", "hour": "시간"}
+    branch_label = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+    pillar_label = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
+
+    lines.append("\n[사주팔자 원국 — 자체 계산, 검증됨]")
+    for key in ("year", "month", "day", "hour"):
         p = fp.get(key)
         if p is None:
-            lines.append(f"  {label}: 시간 미상")
+            lines.append(f"  {pillar_label[key]}: 시간 미상")
             continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        jjg_str = "".join(st for st, _ in jjg.get(branch_label[key], []))
         lines.append(
-            f"  {label}: {p['full']}({p['skyFull']}/{p['earthFull']}) "
-            f"천간십성={p['sippiSeong']} 지지십성={p['earthSippiSeong']} 12운성={p['twelveStage']} 납음={p['naeeum']}"
+            f"  {pillar_label[key]}: {s}{b} "
+            f"천간십성={sipseong.get(stem_label[key], '-')} 지지십성={sipseong.get(branch_label[key], '-')} "
+            f"12운성={stages.get(branch_label[key], '-')} 지장간={jjg_str} 납음={nayin.get(pillar_label[key], '-')}"
         )
 
     el = modules["elements"]
@@ -1747,25 +1795,33 @@ def format_sazu_context(body: dict) -> str:
                      f"12운성={d['twelveFortune']['name']}")
     lines.append(f"  방향: {modules['decadeFortune']['direction']} / 시작연령 {modules['decadeFortune']['startAge']}세")
 
-    lines.append("\n[신살 — 결정적 계산 결과 (역마·도화·화개: 연지 삼합 기준 / 천을귀인: 일간 기준)]")
+    lines.append("\n[신살 — 결정적 계산 결과 (기본 4종: 역마·도화·화개는 연지+일지 기준 / 천을귀인은 일간 기준)]")
     sinsal_result = compute_sinsal(fp)
     lines.append(format_sinsal(sinsal_result))
+
+    lines.append("\n[신살 확장 8종 — 결정적 계산 결과]")
+    ext_result = compute_sinsal_extended(fp)
+    lines.append(format_sinsal_extended(ext_result))
+
+    lines.append("\n[형충파해 — 결정적 계산 결과 (천간합·육합·삼합·반합·방합·충·형·파·해)]")
+    hch_result = compute_hyeongchunghae(fp)
+    lines.append(format_hyeongchunghae(hch_result))
 
     refs = collect_references(sinsal_result, ss.get("score"))
     if refs:
         lines.append("\n[지니님 사주첩경 요약 — 이 사주에 해당하는 부분만 적용]")
         lines.append(refs)
 
-    # Pro 전용 모듈 — 발급된 경우에만 원문 그대로 첨부(무료 플랜은 비어있음)
-    pro_keys = ["gyeokguk", "yongsin", "sinsal", "relationships", "ghostElements", "seun", "weolun", "wongukInteraction", "evaluation"]
+    # Pro 전용 모듈 — 발급된 경우에만 원문 그대로 첨부(무료 플랜은 비어있음). 격국·용신 판단의
+    # 참고 자료로만 쓰고, 위에서 이미 검증된 십성·12운성·신살·형충파해는 이 원본 값으로 덮어쓰지 않는다.
+    pro_keys = ["gyeokguk", "yongsin", "relationships", "ghostElements", "seun", "weolun", "wongukInteraction", "evaluation"]
     pro_data = {k: modules[k] for k in pro_keys if k in modules}
     if pro_data:
-        import json
-        lines.append("\n[SAZU API 제공 — 격국/용신/신살 등 상세 원본 데이터]")
+        lines.append("\n[SAZU API 제공 — 격국/용신 등 참고 원본 데이터 (십성·신살·형충파해는 위 자체 계산이 우선)]")
         lines.append(json.dumps(pro_data, ensure_ascii=False, separators=(",", ":")))
     else:
         lines.append(f"\n[안내] 현재 플랜({meta.get('tier')})에서는 격국·용신 모듈이 제공되지 않습니다."
-                      " 신살은 위에 이미 정확히 계산되어 있으니, 격국·용신만 원국·대운·오행 데이터로 직접 추론하십시오.")
+                      " 신살·형충파해는 위에 이미 정확히 계산되어 있으니, 격국·용신만 원국·대운·오행 데이터로 직접 추론하십시오.")
 
     return "\n".join(lines)
 
@@ -1775,7 +1831,7 @@ def make_prompt(body: dict, gender_label: str) -> str:
     spouse_star = "재성(財星)" if gender_label == "남" else "관성(官星)"
 
     return f"""당신은 사주첩경(四柱捷徑)의 저자 이석영 선생과 자평진전(子平眞詮)에 정통한 명리학자입니다.
-아래 SAZU 만세력 API가 정밀 계산한 사주 데이터를 근거로 삼아, 재계산 없이 그대로 인용하며 해석만 하십시오.
+아래 【 SAZU 계산 결과 】를 근거로 삼아, 재계산 없이 그대로 인용하며 해석만 하십시오. 특히 십성·12운성·납음·지장간·신살·형충파해는 지니님이 실제 만세력 앱과 대조해 검증한 자체 계산 결과이니 반드시 그대로 신뢰하고, 절대 스스로 재계산하거나 다른 값으로 바꾸지 마십시오.
 【 지니님 사주첩경 요약 】이 컨텍스트에 포함되어 있으면, 그 판단 기준을 일반 명리 지식보다 최우선으로 따르십시오. 실제 원문을 인용하는 것처럼 문장을 지어내지 말고, 판단 기준으로만 활용해 당신의 말로 풀이하십시오.
 
 ═══════════════════════════════════════
@@ -1783,13 +1839,14 @@ def make_prompt(body: dict, gender_label: str) -> str:
 {context}
 ═══════════════════════════════════════
 
-다음 5개 항목을 순서대로, A4 한 장 분량으로 압축해 작성하십시오. **각 항목 2~3문장으로 제한**하고, 추상적 나열 없이 이 사주 고유의 핵심만 짚으십시오.
+다음 6개 항목을 순서대로, A4 한 장 분량으로 압축해 작성하십시오. **각 항목 2~3문장으로 제한**하고, 추상적 나열 없이 이 사주 고유의 핵심만 짚으십시오.
 흉(凶)한 내용은 "~한 경향이 있으니 ~하게 대비하면 좋다"처럼 완곡하고 건설적으로 표현하십시오.
 
 ▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준)을 2~3문장으로.
 ▶ 2. 대운(大運) 해석: 현재·다음 대운 위주로 길흉과 그 이유를 2~3문장으로.
-▶ 3. 신살(神殺): 위 [신살 — 결정적 계산 결과]를 그대로 인용하라 (재계산·추가 추론 금지). "있음"인 항목만 현대적 의미로 2~3문장으로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 1문장으로 끝내라.
-▶ 4. 격국(格局): 기본은 정격(正格)이다. 신강신약이 극단적이고 오행이 한쪽으로 쏠렸을 때만 종격(從格)을 검토하고, 그 외에는 "정격, 1번의 용신을 따름"이라고 1문장으로 끝내라.
+▶ 3. 신살(神殺): 위 [신살 — 결정적 계산 결과]와 [신살 확장 8종]을 그대로 인용하라 (재계산·추가 추론 금지). "있음"인 항목만 골라 현대적 의미로 2~3문장으로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 1문장으로 끝내라.
+▶ 4. 형충파해(刑沖破害): 위 [형충파해 — 결정적 계산 결과]를 그대로 인용하라 (재계산 금지). 충·형·파·해 중 "없음"이 아닌 것만 골라 이 사주에 미치는 실질적 영향을 2~3문장으로. 전부 없으면 "형충파해 없이 원국이 안정적"이라고 1문장으로 끝내라.
+▶ 5. 격국(格局): 기본은 정격(正格)이다. 신강신약이 극단적이고 오행이 한쪽으로 쏠렸을 때만 종격(從格)을 검토하고, 그 외에는 "정격, 1번의 용신을 따름"이라고 1문장으로 끝내라.
 ▶ 종합 총평: 핵심 테마와 조언을 2~3문장으로. {gender_label}성 배우자성({spouse_star}) 관련 한 줄 포함.
 
 ※ 한국어, 전문 용어는 한자 병기. 항목 제목 외의 수식어·서론은 생략하고 바로 본문으로 들어가십시오.
