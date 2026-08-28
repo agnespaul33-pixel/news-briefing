@@ -1201,7 +1201,7 @@ OHAENG_JEONWANG = [
 ]
 
 
-def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_score: float | None) -> str:
+def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_score: float | None, gender_label: str) -> str:
     """이 사주에 실제로 해당하는 참고자료만 골라서 반환. 관련 없는 자료는 아예 포함하지 않음."""
     blocks = []
 
@@ -1274,6 +1274,11 @@ def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_scor
     yuk = _load_ref("yukchin", "general.md")
     if yuk:
         blocks.append(f"### [육친] 총론\n{yuk}")
+
+    hwahyeon_file = "여명_화현법.md" if gender_label == "여" else "남명_화현법.md"
+    hwahyeon = _load_ref("yukchin", hwahyeon_file)
+    if hwahyeon:
+        blocks.append(f"### [육친] 화현법 ({gender_label}명 기준)\n{hwahyeon}")
 
     return "\n\n".join(blocks)
 
@@ -2058,7 +2063,7 @@ def format_sazu_context(body: dict) -> str:
     hch_result = compute_hyeongchunghae(fp)
     lines.append(format_hyeongchunghae(hch_result))
 
-    refs = collect_references(fp, sinsal_result, sipseong, ss.get("score"))
+    refs = collect_references(fp, sinsal_result, sipseong, ss.get("score"), "여" if inp["isFemale"] else "남")
     if refs:
         lines.append("\n[지니님 사주첩경 요약 — 이 사주에 해당하는 부분만 적용]")
         lines.append(refs)
