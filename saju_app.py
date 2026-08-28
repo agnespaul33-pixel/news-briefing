@@ -599,8 +599,156 @@ def compute_sinsal_extended(fp: dict) -> dict:
     return result
 
 
+# ── 신살 확장 2차 (9종) — 사주첩경 1권 요약 자료로 검증. 쉐도우 모드 ───────────
+MUNGOK_TARGET = {  # 문곡귀인 (록후 4위)
+    "甲": "亥", "乙": "子", "丙": "寅", "丁": "卯", "戊": "寅",
+    "己": "卯", "庚": "巳", "辛": "午", "壬": "申", "癸": "酉",
+}
+HAKDANG_TARGET = {  # 학당귀인: 일간의 장생궁
+    "甲": "亥", "乙": "午", "丙": "寅", "丁": "酉", "戊": "寅",
+    "己": "酉", "庚": "巳", "辛": "子", "壬": "申", "癸": "卯",
+}
+GWIMUNGWAN_PAIRS = {  # 귀문관살 (생일지 기준)
+    frozenset({"子", "酉"}): "자유귀문", frozenset({"丑", "午"}): "축오귀문",
+    frozenset({"寅", "未"}): "인미귀문", frozenset({"卯", "申"}): "묘신귀문",
+    frozenset({"辰", "亥"}): "진해귀문", frozenset({"巳", "戌"}): "사술귀문",
+}
+GEUPGAK_GROUP_OF = {  # 급각살: 생월 계절 그룹
+    "寅": "인묘진", "卯": "인묘진", "辰": "인묘진",
+    "巳": "사오미", "午": "사오미", "未": "사오미",
+    "申": "신유술", "酉": "신유술", "戌": "신유술",
+    "亥": "해자축", "子": "해자축", "丑": "해자축",
+}
+GEUPGAK_TARGET_BY_GROUP = {"인묘진": {"亥", "子"}, "사오미": {"卯", "未"}, "신유술": {"寅", "戌"}, "해자축": {"丑", "辰"}}
+SUOK_TARGET_BY_TRIAD = {"신자진": "午", "인오술": "子", "사유축": "卯", "해묘미": "酉"}  # 수옥살(재살)
+TANGHWA_DAY_TARGETS = {"寅": {"巳", "申"}, "午": {"午", "丑", "辰"}, "丑": {"午", "未", "戌"}}  # 탕화살
+GORAN_PILLARS = {"甲寅", "乙巳", "丁巳", "戊申", "辛亥"}  # 고란살(신음살) — 여명 기준
+NAKJEONG_STEM_GROUP = {
+    "甲": "갑기", "己": "갑기", "乙": "을경", "庚": "을경", "丙": "병신",
+    "辛": "병신", "丁": "정임", "壬": "정임", "戊": "무계", "癸": "무계",
+}
+NAKJEONG_TARGET_BY_GROUP = {"갑기": "巳", "을경": "子", "병신": "申", "정임": "戌", "무계": "卯"}  # 낙정관살
+EUMYANG_CHACHAK_PILLARS = {  # 음양차착살 (일주 또는 시주)
+    "丙子", "丙午", "辛卯", "辛酉", "丁丑", "丁未",
+    "壬辰", "壬戌", "戊寅", "戊申", "癸巳", "癸亥",
+}
+
+
+def compute_sinsal_extended2(fp: dict) -> dict:
+    """귀문관살·문곡귀인·학당귀인·급각살·수옥살·탕화살·고란살·낙정관살·음양차착살.
+
+    반환 형식은 compute_sinsal_extended()와 동일 (신살명 -> 위치 라벨 리스트).
+    """
+    branch_labels = {"year": "연지", "month": "월지", "day": "일지", "hour": "시지"}
+    result = {name: [] for name in (
+        "귀문관살", "문곡귀인", "학당귀인", "급각살", "수옥살",
+        "탕화살", "고란살", "낙정관살", "음양차착살",
+    )}
+
+    day_p = fp.get("day")
+    if day_p is None:
+        return result
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS)
+    day_branch = _extract_char(day_p.get("earthFull"), BRANCH_CHARS)
+    hour_p = fp.get("hour")
+    hour_branch = _extract_char(hour_p.get("earthFull"), BRANCH_CHARS) if hour_p else None
+    hour_stem = _extract_char(hour_p.get("skyFull"), STEM_CHARS) if hour_p else None
+
+    branches_present = {}
+    pillars_str = {}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if b:
+            branches_present.setdefault(b, []).append(branch_labels[key])
+        if s and b:
+            pillars_str[key] = s + b
+
+    # 일간 기준 (문곡귀인·학당귀인)
+    for name, table in (("문곡귀인", MUNGOK_TARGET), ("학당귀인", HAKDANG_TARGET)):
+        target = table.get(day_stem)
+        if target and target in branches_present:
+            result[name] = branches_present[target]
+
+    # 귀문관살: 생일지 기준, 다른 지지와의 조합
+    if day_branch:
+        for key, b in [(k, _extract_char((fp.get(k) or {}).get("earthFull"), BRANCH_CHARS))
+                        for k in ("year", "month", "hour")]:
+            if not b:
+                continue
+            pair = frozenset({day_branch, b})
+            if pair in GWIMUNGWAN_PAIRS:
+                result["귀문관살"].append(f"일지-{branch_labels[key]}")
+
+    # 급각살: 생월 계절 그룹 기준으로 년·일·시지 확인
+    month_p = fp.get("month")
+    month_branch = _extract_char(month_p.get("earthFull"), BRANCH_CHARS) if month_p else None
+    if month_branch:
+        group = GEUPGAK_GROUP_OF.get(month_branch)
+        targets = GEUPGAK_TARGET_BY_GROUP.get(group, set())
+        for t in targets:
+            if t in branches_present:
+                for label in branches_present[t]:
+                    if label != "월지":
+                        result["급각살"].append(label)
+
+    # 수옥살(재살): 연지·일지 기준 삼합 왕지 대칭 (역마와 같은 방식)
+    year_p = fp.get("year")
+    year_branch = _extract_char(year_p.get("earthFull"), BRANCH_CHARS) if year_p else None
+    for base_branch in (year_branch, day_branch):
+        triad = TRIAD_OF_BRANCH.get(base_branch) if base_branch else None
+        if triad:
+            target = SUOK_TARGET_BY_TRIAD.get(triad)
+            if target and target in branches_present:
+                for label in branches_present[target]:
+                    if label not in result["수옥살"]:
+                        result["수옥살"].append(label)
+
+    # 탕화살: 일지가 寅/午/丑일 때 다른 기둥에 대응 지지가 있는지
+    if day_branch in TANGHWA_DAY_TARGETS:
+        targets = TANGHWA_DAY_TARGETS[day_branch]
+        for key in ("year", "month", "hour"):
+            p = fp.get(key)
+            b = _extract_char((p or {}).get("earthFull"), BRANCH_CHARS) if p else None
+            if b in targets:
+                result["탕화살"].append(branch_labels[key])
+
+    # 고란살(신음살) — 여명 기준 일주 고정 리스트 (성별 무관하게 계산만, 해석시 여명 한정 적용 권장)
+    if pillars_str.get("day") in GORAN_PILLARS:
+        result["고란살"].append("일주")
+
+    # 낙정관살: 일간 기준 그룹 -> 목표 지지가 일지 또는 시지에 있는지
+    group = NAKJEONG_STEM_GROUP.get(day_stem)
+    target = NAKJEONG_TARGET_BY_GROUP.get(group) if group else None
+    if target:
+        if day_branch == target:
+            result["낙정관살"].append("일지")
+        if hour_branch == target:
+            result["낙정관살"].append("시지")
+
+    # 음양차착살: 일주 또는 시주가 고정 리스트에 있는지
+    if pillars_str.get("day") in EUMYANG_CHACHAK_PILLARS:
+        result["음양차착살"].append("일주")
+    if pillars_str.get("hour") in EUMYANG_CHACHAK_PILLARS:
+        result["음양차착살"].append("시주")
+
+    return result
+
+
 def format_sinsal_extended(ext: dict) -> str:
     order = ["문창귀인", "암록", "금여", "양인살", "괴강살", "백호살", "원진살", "공망"]
+    lines = []
+    for name in order:
+        items = ext.get(name, [])
+        lines.append(f"  {name}: " + ("; ".join(items) if items else "없음"))
+    return "\n".join(lines)
+
+
+def format_sinsal_extended2(ext: dict) -> str:
+    order = ["귀문관살", "문곡귀인", "학당귀인", "급각살", "수옥살", "탕화살", "고란살", "낙정관살", "음양차착살"]
     lines = []
     for name in order:
         items = ext.get(name, [])
@@ -1177,6 +1325,9 @@ SINSAL_HANJA = {
     "역마": "驛馬", "도화": "桃花", "화개": "華蓋", "천을귀인": "天乙",
     "문창귀인": "文昌", "암록": "暗祿", "금여": "金輿", "양인살": "羊刃",
     "괴강살": "魁罡", "백호살": "白虎", "원진살": "怨嗔", "공망": "空亡",
+    "귀문관살": "鬼門", "문곡귀인": "文曲", "학당귀인": "學堂", "급각살": "急脚",
+    "수옥살": "囚獄", "탕화살": "湯火", "고란살": "孤鸞", "낙정관살": "落井",
+    "음양차착살": "差錯",
 }
 
 
@@ -1218,6 +1369,25 @@ def sinsal_hanja_by_pillar(fp: dict) -> dict:
         for key in result:
             if key in prefix:
                 result[key].append(SINSAL_HANJA["원진살"])
+
+    # 신살 확장 2차 (귀문관살 등 9종)
+    ext2 = compute_sinsal_extended2(fp)
+    for name in ("문곡귀인", "학당귀인", "급각살", "수옥살", "탕화살"):
+        for item in ext2.get(name, []):
+            if item in result:
+                result[item].append(SINSAL_HANJA[name])
+    for item in ext2.get("귀문관살", []):  # "일지-연지" 형태
+        for key in result:
+            if key in item:
+                result[key].append(SINSAL_HANJA["귀문관살"])
+    for name in ("고란살", "음양차착살"):  # "일주"/"시주" 형태
+        for zhu_label in ext2.get(name, []):
+            ji_label = zhu_to_ji.get(zhu_label)
+            if ji_label:
+                result[ji_label].append(SINSAL_HANJA[name])
+    for item in ext2.get("낙정관살", []):  # 이미 "일지"/"시지" 형태
+        if item in result:
+            result[item].append(SINSAL_HANJA["낙정관살"])
 
     return result
 
@@ -1372,6 +1542,7 @@ def render_sinsal_badges(fp: dict):
     """있는 신살만 배지로 표시 (없는 항목은 아예 표시 안 함)."""
     sinsal = compute_sinsal(fp)
     ext = compute_sinsal_extended(fp)
+    ext2 = compute_sinsal_extended2(fp)
     badges = []
     for name in ("역마", "도화", "화개"):
         by_base = sinsal.get(name, {})
@@ -1383,6 +1554,10 @@ def render_sinsal_badges(fp: dict):
         badges.append(f"천을귀인({','.join(sinsal['천을귀인'])})")
     for name in ("문창귀인", "암록", "금여", "양인살", "괴강살", "백호살", "원진살", "공망"):
         items = ext.get(name, [])
+        if items:
+            badges.append(f"{name}({'; '.join(items)})")
+    for name in ("귀문관살", "문곡귀인", "학당귀인", "급각살", "수옥살", "탕화살", "고란살", "낙정관살", "음양차착살"):
+        items = ext2.get(name, [])
         if items:
             badges.append(f"{name}({'; '.join(items)})")
 
@@ -1875,6 +2050,10 @@ def format_sazu_context(body: dict) -> str:
     ext_result = compute_sinsal_extended(fp)
     lines.append(format_sinsal_extended(ext_result))
 
+    lines.append("\n[신살 확장 2차 9종 — 결정적 계산 결과 (귀문관살·문곡귀인·학당귀인·급각살·수옥살·탕화살·고란살·낙정관살·음양차착살)]")
+    ext2_result = compute_sinsal_extended2(fp)
+    lines.append(format_sinsal_extended2(ext2_result))
+
     lines.append("\n[형충파해 — 결정적 계산 결과 (천간합·육합·삼합·반합·방합·충·형·파·해)]")
     hch_result = compute_hyeongchunghae(fp)
     lines.append(format_hyeongchunghae(hch_result))
@@ -1916,7 +2095,7 @@ def make_prompt(body: dict, gender_label: str) -> str:
 
 ▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준)을 2~3문장으로.
 ▶ 2. 대운(大運) 해석: 현재·다음 대운 위주로 길흉과 그 이유를 2~3문장으로.
-▶ 3. 신살(神殺): 위 [신살 — 결정적 계산 결과]와 [신살 확장 8종]을 그대로 인용하라 (재계산·추가 추론 금지). "있음"인 항목만 골라 현대적 의미로 2~3문장으로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 1문장으로 끝내라.
+▶ 3. 신살(神殺): 위 [신살 — 결정적 계산 결과]와 [신살 확장 8종], [신살 확장 2차 9종]을 그대로 인용하라 (재계산·추가 추론 금지). "있음"인 항목만 골라 현대적 의미로 2~3문장으로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 1문장으로 끝내라.
 ▶ 4. 형충파해(刑沖破害): 위 [형충파해 — 결정적 계산 결과]를 그대로 인용하라 (재계산 금지). 충·형·파·해 중 "없음"이 아닌 것만 골라 이 사주에 미치는 실질적 영향을 2~3문장으로. 전부 없으면 "형충파해 없이 원국이 안정적"이라고 1문장으로 끝내라.
 ▶ 5. 격국(格局): 기본은 정격(正格)이다. 신강신약이 극단적이고 오행이 한쪽으로 쏠렸을 때만 종격(從格)을 검토하고, 그 외에는 "정격, 1번의 용신을 따름"이라고 1문장으로 끝내라.
 ▶ 종합 총평: 핵심 테마와 조언을 2~3문장으로. {gender_label}성 배우자성({spouse_star}) 관련 한 줄 포함.
