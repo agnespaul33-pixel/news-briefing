@@ -506,7 +506,7 @@ GEUMYEO_TARGET = {  # 금여(록): 통용 조견표
 YANGIN_TARGET = {  # 양인살: 일간과 같은 오행의 제왕지 (양간만 성립, 음간은 해당없음)
     "甲": "卯", "丙": "午", "戊": "午", "庚": "酉", "壬": "子",
 }
-GOEGANG_PILLARS = {"戊戌", "庚辰", "庚戌", "壬辰"}
+GOEGANG_PILLARS = {"庚辰", "庚戌", "壬辰", "壬戌"}  # 지니님 사주첩경 4·5권 요약 자료 기준
 BAEKHO_PILLARS = {"甲辰", "乙未", "丙戌", "丁丑", "戊辰", "壬戌", "癸丑"}
 WONJIN_PAIRS = {  # 원진살
     frozenset({"子", "未"}): "자미원진", frozenset({"丑", "午"}): "축오원진",
@@ -1031,7 +1031,29 @@ def _sinsal_found(sinsal: dict, name: str) -> bool:
     return bool(value)  # 천을귀인: 리스트
 
 
-def collect_references(sinsal: dict, sin_strength_score: float | None) -> str:
+# 월지 십성 → 정격 파일명 (지니님 사주첩경 4·5권 요약 기준)
+JEONGGYEOK_FILE_MAP = {
+    "정관": "정관격", "편관": "편관격",
+    "정인": "인수격", "편인": "인수격",
+    "정재": "정재격", "편재": "편재격",
+    "식신": "식신격", "상관": "상관격",
+    "겁재": "양인격", "비견": "건록격",
+}
+# 일귀격·일덕격 — 일주(간지 조합) 고정 리스트 (지니님 요약 자료 기준)
+ILGWI_PILLARS = {"癸卯", "癸巳", "丁酉", "丁亥"}
+ILDEOK_PILLARS = {"甲寅", "丙辰", "戊辰", "庚辰", "壬戌"}
+# 괴강격은 신살용 GOEGANG_PILLARS(위에서 지니님 자료 기준으로 이미 수정됨)를 그대로 재사용
+# 오행전왕격 — (일간오행, 필요조건 지지 3~4개, 파일명)
+OHAENG_JEONWANG = [
+    ("木", {"亥", "卯", "未"}, "오행전왕격"),  # 곡직격
+    ("火", {"寅", "午", "戌"}, "오행전왕격"),  # 염상격
+    ("土", {"辰", "戌", "丑", "未"}, "오행전왕격"),  # 가색격
+    ("金", {"巳", "酉", "丑"}, "오행전왕격"),  # 종혁격
+    ("水", {"申", "子", "辰"}, "오행전왕격"),  # 윤하격
+]
+
+
+def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_score: float | None) -> str:
     """이 사주에 실제로 해당하는 참고자료만 골라서 반환. 관련 없는 자료는 아예 포함하지 않음."""
     blocks = []
 
@@ -1044,6 +1066,56 @@ def collect_references(sinsal: dict, sin_strength_score: float | None) -> str:
     gen = _load_ref("gyeokguk", "general.md")
     if gen:
         blocks.append(f"### [격국] 총론\n{gen}")
+
+    ys_gen = _load_ref("yongsin", "general.md")
+    if ys_gen:
+        blocks.append(f"### [용신] 5유형 총론\n{ys_gen}")
+
+    # 월지 십성 기준 정격 10종 중 해당하는 것만
+    wolji_sipseong = sipseong.get("월지")
+    jeonggyeok_file = JEONGGYEOK_FILE_MAP.get(wolji_sipseong)
+    if jeonggyeok_file:
+        text = _load_ref("gyeokguk", "정격", f"{jeonggyeok_file}.md")
+        if text:
+            blocks.append(f"### [격국] {jeonggyeok_file} (월지 십성={wolji_sipseong})\n{text}")
+
+    # 일주 고정 리스트 기준 특수격
+    day_p = fp.get("day")
+    day_ganji = None
+    if day_p:
+        s = _extract_char(day_p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(day_p.get("earthFull"), BRANCH_CHARS)
+        if s and b:
+            day_ganji = s + b
+    if day_ganji in ILGWI_PILLARS:
+        text = _load_ref("gyeokguk", "특수", "일귀격.md")
+        if text:
+            blocks.append(f"### [격국] 일귀격 (일주={day_ganji})\n{text}")
+    if day_ganji in ILDEOK_PILLARS:
+        text = _load_ref("gyeokguk", "특수", "일덕격.md")
+        if text:
+            blocks.append(f"### [격국] 일덕격 (일주={day_ganji})\n{text}")
+    if day_ganji in GOEGANG_PILLARS:
+        text = _load_ref("gyeokguk", "특수", "괴강격.md")
+        if text:
+            blocks.append(f"### [격국] 괴강격 (일주={day_ganji})\n{text}")
+
+    # 오행전왕격 — 일간 오행 + 해당 지지 전부 있을 때만
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS) if day_p else None
+    day_element = STEM_ELEMENT.get(day_stem) if day_stem else None
+    branches_present = set()
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p:
+            b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+            if b:
+                branches_present.add(b)
+    for elem, required, fname in OHAENG_JEONWANG:
+        if day_element == elem and required <= branches_present:
+            text = _load_ref("gyeokguk", "특수", f"{fname}.md")
+            if text:
+                blocks.append(f"### [격국] 오행전왕격 (일간오행={elem}, 지지={''.join(sorted(required))})\n{text}")
+            break  # 5종 중 하나만 성립 가능
 
     # 신강신약 점수가 극단(0~20 또는 80~100)일 때만 종격 판단 기준 추가
     if sin_strength_score is not None and (sin_strength_score <= 20 or sin_strength_score >= 80):
@@ -1807,7 +1879,7 @@ def format_sazu_context(body: dict) -> str:
     hch_result = compute_hyeongchunghae(fp)
     lines.append(format_hyeongchunghae(hch_result))
 
-    refs = collect_references(sinsal_result, ss.get("score"))
+    refs = collect_references(fp, sinsal_result, sipseong, ss.get("score"))
     if refs:
         lines.append("\n[지니님 사주첩경 요약 — 이 사주에 해당하는 부분만 적용]")
         lines.append(refs)
