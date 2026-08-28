@@ -107,11 +107,53 @@ def _extract_char(text: str | None, charset: str) -> str | None:
     ),
     (
         "5. render_saju_dashboard_table 한자/한글 불일치 (제출마다 크래시)",
-        '''        if s and s in STEM_ELEMENT:
+        # elem_count 선언(한글 키)까지 하나의 앵커 블록에 포함시킨다 — 증가 로직
+        # 텍스트만 앵커로 쓰면, 이후 버전에서 elem_count 자체를 한자 키로
+        # 리팩터링했을 때(증가 로직 텍스트는 우연히 똑같이 남을 수 있음) 이 fix가
+        # 오작동해서 이미 한자 키인 딕셔너리에 HANJA_ELEMENT_TO_KR로 또 감싼 한글
+        # 키로 접근해 새 KeyError를 만든다(2026-08-28 saju_app (13).py에서 실제로
+        # 이렇게 고장난 것을 발견 — 반드시 선언 줄까지 같이 매칭되어야 안전).
+        '''    elem_count = {"목": 0, "화": 0, "토": 0, "금": 0, "수": 0}
+
+    for key in order:
+        p = fp.get(key)
+        if p is None:
+            top.append(lab("-")); stems.append(big("-", True))
+            branches.append(big("-", False)); sinsal_row.append(sinsal_cell([]))
+            bottom.append(lab("-")); jjgs.append(lab("-"))
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        top.append(lab("일원" if key == "day" else sipseong.get(stem_label[key], "-")))
+        stems.append(big(s or "-", True))
+        branches.append(big(b or "-", False))
+        sinsal_row.append(sinsal_cell(sinsal_by_pillar.get(branch_label[key], [])))
+        bottom.append(lab(sipseong.get(branch_label[key], "-")))
+        pairs = jjg.get(branch_label[key], [])
+        jjgs.append(lab("".join(st for st, _ in pairs)))
+        if s and s in STEM_ELEMENT:
             elem_count[STEM_ELEMENT[s]] += 1
         if b and b in BRANCH_ELEMENT:
             elem_count[BRANCH_ELEMENT[b]] += 1''',
-        '''        if s and s in STEM_ELEMENT:
+        '''    elem_count = {"목": 0, "화": 0, "토": 0, "금": 0, "수": 0}
+
+    for key in order:
+        p = fp.get(key)
+        if p is None:
+            top.append(lab("-")); stems.append(big("-", True))
+            branches.append(big("-", False)); sinsal_row.append(sinsal_cell([]))
+            bottom.append(lab("-")); jjgs.append(lab("-"))
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        top.append(lab("일원" if key == "day" else sipseong.get(stem_label[key], "-")))
+        stems.append(big(s or "-", True))
+        branches.append(big(b or "-", False))
+        sinsal_row.append(sinsal_cell(sinsal_by_pillar.get(branch_label[key], [])))
+        bottom.append(lab(sipseong.get(branch_label[key], "-")))
+        pairs = jjg.get(branch_label[key], [])
+        jjgs.append(lab("".join(st for st, _ in pairs)))
+        if s and s in STEM_ELEMENT:
             elem_count[HANJA_ELEMENT_TO_KR[STEM_ELEMENT[s]]] += 1
         if b and b in BRANCH_ELEMENT:
             elem_count[HANJA_ELEMENT_TO_KR[BRANCH_ELEMENT[b]]] += 1''',

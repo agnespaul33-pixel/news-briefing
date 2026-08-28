@@ -56,6 +56,7 @@ SAZU_MODULES = [
 
 ELEMENT_ORDER = ["wood", "fire", "earth", "metal", "water"]
 ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "water": "수"}
+ELEMENT_KR_BY_HANJA = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
 PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
 # STEM_ELEMENT/BRANCH_ELEMENT(아래 정의)는 오행을 한자(木火土金水)로 반환하는데,
@@ -738,6 +739,86 @@ def compute_sinsal_extended2(fp: dict) -> dict:
     return result
 
 
+# ── 격국 특수원리 9종 — 사주첩경 6권 요약 자료로 검증. 쉐도우 모드 ──────────────
+BUSEONG_IMMYO_TARGETS = {  # 부성입묘: 일간별 관성이 묘궁에 있는 간지
+    "甲": ["辛丑"], "乙": ["辛丑"], "丙": ["壬辰"], "丁": ["壬辰"],
+    "戊": ["乙未"], "己": ["乙未"], "庚": ["丙戌", "戊戌"], "辛": ["丙戌", "戊戌"],
+    "壬": ["戊辰"], "癸": ["戊辰"],
+}
+
+
+def compute_gyeokguk_teukjip(fp: dict, sipseong: dict) -> dict:
+    """격국 특수원리 9종: 부성입묘·진상관·가상관·관살혼잡·살인상생·탐재괴인·군겁쟁재·등라계갑·순환상생·살인상정.
+
+    반환: {"부성입묘": True/False, ...} 각 패턴 성립 여부(불리언).
+    """
+    result = {}
+    day_p = fp.get("day")
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS) if day_p else None
+
+    pillars_str = []
+    stems_present = []
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if s:
+            stems_present.append(s)
+        if s and b:
+            pillars_str.append(s + b)
+
+    # 1. 부성입묘
+    targets = BUSEONG_IMMYO_TARGETS.get(day_stem, [])
+    result["부성입묘"] = any(t in pillars_str for t in targets)
+
+    # 2·3. 진상관/가상관 (상호 배타)
+    wolji_sipseong = sipseong.get("월지")
+    other_values = [v for k, v in sipseong.items() if k not in ("일간", "월지")]
+    if wolji_sipseong == "상관":
+        result["진상관"], result["가상관"] = True, False
+    elif "상관" in other_values:
+        result["진상관"], result["가상관"] = False, True
+    else:
+        result["진상관"], result["가상관"] = False, False
+
+    sipseong_values = [v for k, v in sipseong.items() if k != "일간"]
+    has_jae = "정재" in sipseong_values or "편재" in sipseong_values
+    has_in = "정인" in sipseong_values or "편인" in sipseong_values
+
+    # 4. 관살혼잡
+    result["관살혼잡"] = "정관" in sipseong_values and "편관" in sipseong_values
+    # 5. 살인상생
+    result["살인상생"] = "편관" in sipseong_values and has_in
+    # 6. 탐재괴인
+    result["탐재괴인"] = has_jae and has_in
+    # 7. 군겁쟁재 (비겁 2개 이상 + 재성)
+    bigyeop_count = sum(1 for v in sipseong_values if v in ("비견", "겁재"))
+    result["군겁쟁재"] = bigyeop_count >= 2 and has_jae
+    # 8. 등라계갑 (을일간 + 갑목 존재)
+    result["등라계갑"] = day_stem == "乙" and "甲" in stems_present
+    # 9. 순환상생 (오행 5개 전부 존재)
+    elem_count_hanja = {"木": 0, "火": 0, "土": 0, "金": 0, "水": 0}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        if s and s in STEM_ELEMENT:
+            elem_count_hanja[STEM_ELEMENT[s]] += 1
+        if b and b in BRANCH_ELEMENT:
+            elem_count_hanja[BRANCH_ELEMENT[b]] += 1
+    result["순환상생"] = all(c >= 1 for c in elem_count_hanja.values())
+    # 10. 살인상정 (편관 + 양인살)
+    ext = compute_sinsal_extended(fp)
+    result["살인상정"] = "편관" in sipseong_values and bool(ext.get("양인살"))
+
+    return result
+
+
+
 def format_sinsal_extended(ext: dict) -> str:
     order = ["문창귀인", "암록", "금여", "양인살", "괴강살", "백호살", "원진살", "공망"]
     lines = []
@@ -1271,6 +1352,25 @@ def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_scor
         if jong:
             blocks.append(f"### [격국] 종격 판단 기준\n{jong}")
 
+    # 격국 특수원리 9종 — 성립하는 것만
+    teukjip = compute_gyeokguk_teukjip(fp, sipseong)
+    teukjip_filenames = {
+        "부성입묘": "부성입묘.md", "진상관": "진가상관.md", "가상관": "진가상관.md",
+        "관살혼잡": "관살혼잡.md", "살인상생": "살인상생.md", "탐재괴인": "탐재괴인.md",
+        "군겁쟁재": "군겁쟁재.md", "등라계갑": "등라계갑.md", "순환상생": "순환상생.md",
+        "살인상정": "살인상정.md",
+    }
+    loaded_files = set()
+    for name, is_true in teukjip.items():
+        if is_true and name in teukjip_filenames:
+            fname = teukjip_filenames[name]
+            if fname in loaded_files:  # 진상관/가상관처럼 같은 파일을 공유하는 경우 중복 방지
+                continue
+            text = _load_ref("gyeokguk", "특수원리", fname)
+            if text:
+                blocks.append(f"### [격국 특수원리] {name}\n{text}")
+                loaded_files.add(fname)
+
     yuk = _load_ref("yukchin", "general.md")
     if yuk:
         blocks.append(f"### [육친] 총론\n{yuk}")
@@ -1420,7 +1520,7 @@ def render_saju_dashboard_table(fp: dict):
                 f'font-size:1.5rem;font-weight:700;padding:10px 4px;">{ch}</td>')
 
     top, stems, branches, sinsal_row, bottom, jjgs = [], [], [], [], [], []
-    elem_count = {"목": 0, "화": 0, "토": 0, "금": 0, "수": 0}
+    elem_count = {"木": 0, "火": 0, "土": 0, "金": 0, "水": 0}
 
     for key in order:
         p = fp.get(key)
@@ -1439,13 +1539,13 @@ def render_saju_dashboard_table(fp: dict):
         pairs = jjg.get(branch_label[key], [])
         jjgs.append(lab("".join(st for st, _ in pairs)))
         if s and s in STEM_ELEMENT:
-            elem_count[HANJA_ELEMENT_TO_KR[STEM_ELEMENT[s]]] += 1
+            elem_count[STEM_ELEMENT[s]] += 1
         if b and b in BRANCH_ELEMENT:
-            elem_count[HANJA_ELEMENT_TO_KR[BRANCH_ELEMENT[b]]] += 1
+            elem_count[BRANCH_ELEMENT[b]] += 1
 
     elem_row = "".join(
-        f'<td style="text-align:center;font-size:.82rem;padding:4px;">{e}({elem_count[e]})</td>'
-        for e in ("목", "화", "토", "금", "수")
+        f'<td style="text-align:center;font-size:.82rem;padding:4px;">{ELEMENT_KR_BY_HANJA[e]}({elem_count[e]})</td>'
+        for e in ("木", "火", "土", "金", "水")
     )
 
     st.markdown(
