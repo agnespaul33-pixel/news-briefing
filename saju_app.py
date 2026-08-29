@@ -58,6 +58,9 @@ ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "wat
 ELEMENT_KR_BY_HANJA = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
 PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
+# STEM_ELEMENT/BRANCH_ELEMENT(아래 정의)는 오행을 한자(木火土金水)로 반환하는데,
+# elem_count 등 집계용 딕셔너리는 한글 키(목화토금수)를 쓰므로 여기서 변환한다.
+HANJA_ELEMENT_TO_KR = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
 
 # ── 신살 조견표 (사주첩경 전통 방식: 역마·도화·화개는 연지 삼합 기준, 천을귀인은 일간 기준) ──
 BRANCH_CHARS = "子丑寅卯辰巳午未申酉戌亥"
@@ -86,13 +89,32 @@ CHEONEUL_TARGET = {
 }
 
 
+# SAZU API는 skyFull/earthFull을 한자가 아닌 한글로 반환한다(예: 일간 己=='기토', 일지 卯=='묘목').
+# 아래 두 매핑으로 한글→한자 역변환한다. "신"은 천간 辛과 지지 申이 둘 다 '신'으로 읽혀 충돌하므로,
+# 반드시 두 매핑을 분리해두고, 호출부가 넘긴 charset(STEM_CHARS 또는 BRANCH_CHARS)으로 어느 쪽인지
+# 문맥에 맞게 판별해야 한다(skyFull을 파싱할 땐 STEM_CHARS를 넘기므로 辛로, earthFull을 파싱할 땐
+# BRANCH_CHARS를 넘기므로 申으로 정확히 갈린다).
+STEM_HANGUL_TO_HANJA = {
+    "갑": "甲", "을": "乙", "병": "丙", "정": "丁", "무": "戊",
+    "기": "己", "경": "庚", "신": "辛", "임": "壬", "계": "癸",
+}
+BRANCH_HANGUL_TO_HANJA = {
+    "자": "子", "축": "丑", "인": "寅", "묘": "卯", "진": "辰", "사": "巳",
+    "오": "午", "미": "未", "신": "申", "유": "酉", "술": "戌", "해": "亥",
+}
+
+
 def _extract_char(text: str | None, charset: str) -> str | None:
-    """표시용 문자열(예: '자(子)', '갑')에서 원본 한자 1글자를 추출."""
+    """표시용 문자열(예: SAZU의 '기토', '묘목')에서 원본 한자 1글자를 추출."""
     if not text:
         return None
     for ch in text:
         if ch in charset:
             return ch
+        for hangul_map in (STEM_HANGUL_TO_HANJA, BRANCH_HANGUL_TO_HANJA):
+            mapped = hangul_map.get(ch)
+            if mapped and mapped in charset:
+                return mapped
     return None
 
 
@@ -1198,9 +1220,6 @@ def _accumulate_ganji_interaction(result: dict, label: str, s: str | None, b: st
 
 def format_wolwoon(wo_stem: str, wo_branch: str) -> str:
     return f"  월운 간지: {wo_stem}{wo_branch}"
-    if len(lines) == 1:
-        lines.append("  (원국·세운과 특별한 충돌 없음)")
-    return "\n".join(lines)
 
 
 def format_sinsal(sinsal: dict) -> str:
@@ -1438,7 +1457,8 @@ HIGHLIGHT_COLOR = "#ff8a3d"
 
 
 def _char_elem_bg_color(ch: str, is_stem: bool) -> tuple[str, str]:
-    elem = STEM_ELEMENT.get(ch) if is_stem else BRANCH_ELEMENT.get(ch)
+    elem_hanja = STEM_ELEMENT.get(ch) if is_stem else BRANCH_ELEMENT.get(ch)
+    elem = HANJA_ELEMENT_TO_KR.get(elem_hanja)
     return ELEMENT_BG.get(elem, "#eeeeee"), ELEMENT_TEXT_ON_BG.get(elem, "#000000")
 
 
@@ -1565,11 +1585,11 @@ def render_saju_dashboard_table(fp: dict):
     )
 
     st.markdown(
-        f"""<table style="width:100%;border-collapse:collapse;">
+        f"""<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
 <tr>{''.join(top)}</tr><tr>{''.join(stems)}</tr><tr>{''.join(branches)}</tr>
 <tr>{''.join(sinsal_row)}</tr><tr>{''.join(bottom)}</tr><tr>{''.join(jjgs)}</tr>
 </table>
-<table style="width:100%;border-collapse:collapse;margin-top:2px;border-top:1px solid #ddd;">
+<table style="width:100%;border-collapse:collapse;margin-top:2px;border-top:1px solid #ddd;table-layout:fixed;">
 <tr>{elem_row}</tr></table>""",
         unsafe_allow_html=True,
     )
@@ -1617,7 +1637,17 @@ def render_daewoon_strip_from_sazu(dw_module: dict, current_age: int | None):
         if current_age is not None and item["startAge"] <= current_age < item["startAge"] + 10:
             current_idx = i
             break
-    rows = [(str(item["startAge"]), item["full"][0], item["full"][1], "") for item in display]
+    # item["full"]은 SAZU가 한글로 주는 간지 표시문자열(예: "계미") — 색상 조회는 한자
+    # 기준(STEM_CHARS/BRANCH_CHARS)이므로 한글→한자로 변환해서 넘긴다.
+    rows = [
+        (
+            str(item["startAge"]),
+            STEM_HANGUL_TO_HANJA.get(item["full"][0], item["full"][0]),
+            BRANCH_HANGUL_TO_HANJA.get(item["full"][1], item["full"][1]),
+            "",
+        )
+        for item in display
+    ]
     render_horizontal_strip(
         rows, current_idx,
         f"대운(大運) — {dw_module.get('direction', '')} · {dw_module.get('startAge', '?')}세부터",
