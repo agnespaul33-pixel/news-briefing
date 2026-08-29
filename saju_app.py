@@ -32,9 +32,10 @@ def _secret(name: str) -> str:
 
 SAZU_API_KEY = _secret("SAZU_API_KEY")
 GEMINI_API_KEY = _secret("SAJU_GEMINI_API_KEY")
-# 주의: gemini-1.5-flash는 이미 서비스 종료(404). gemini-2.5-flash는 2026-10-16 종료 예정.
-# 필요 시 GEMINI_MODEL 환경변수로 gemini-3.1-flash-lite 등으로 전환 테스트 가능.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+# 주의: gemini-1.5-flash, gemini-2.5-flash-lite는 이미 이 계정에서 사용 불가(404).
+# gemini-2.5-flash는 2026-10-16 이후 종료 예정(Google 공식, 확정일은 6개월 전 재공지) —
+# 그때는 GEMINI_MODEL 환경변수로 gemini-3.6-flash 등으로 전환.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 _missing = [n for n, v in (("SAZU_API_KEY", SAZU_API_KEY), ("SAJU_GEMINI_API_KEY", GEMINI_API_KEY)) if not v]
 if _missing:
