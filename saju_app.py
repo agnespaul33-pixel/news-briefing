@@ -2330,20 +2330,58 @@ if _notion_records:
         if not label or label == _NOTION_PICK_SENTINEL:
             return
         idx = _notion_rec_names.index(label)
+        rec = _notion_records[idx]
         try:
-            fp = json.loads(_notion_records[idx]["원국JSON"])
+            birth_y, birth_m, birth_d = (int(x) for x in rec["생년월일"].split("-"))
+            calendar_type = rec.get("달력") or "양력"
+            gender_label = rec.get("성별") or "남"
+            time_str = rec.get("생시") or "시간미상"
+            time_known = time_str != "시간미상"
+            hour = minute = None
+            time_idx = _DEFAULT_TIME_IDX
+            if time_known:
+                hour, minute = (int(x) for x in time_str.split(":"))
+                for i, (_, t_h, t_m, _off) in enumerate(TIME_OPTIONS):
+                    if t_h == hour and t_m == minute:
+                        time_idx = i
+                        break
+
+            is_lunar_input = calendar_type in ("음력", "음력윤달")
+            payload = {
+                "birthYear": birth_y, "birthMonth": birth_m, "birthDay": birth_d,
+                "isLunar": is_lunar_input, "isFemale": gender_label == "여",
+                "modules": SAZU_MODULES,
+            }
+            if calendar_type == "음력윤달":
+                payload["isLeapMonth"] = True
+            elif calendar_type == "음력":
+                payload["isLeapMonth"] = False
+            if time_known:
+                payload["birthHour"] = hour
+                payload["birthMinute"] = minute
+
+            body = call_sazu(payload)
         except Exception as e:
             st.session_state["_notion_pick_error"] = str(e)
             return
-        st.session_state["loaded_fp_from_notion"] = fp
-        st.session_state["loaded_fp_label"] = label
+
+        st.session_state["sazu_body"] = body
+        st.session_state["gender_label"] = gender_label
+        st.session_state.pop("interpretation", None)
+        st.session_state.pop("loaded_fp_from_notion", None)
+        st.session_state.pop("loaded_fp_label", None)
+        st.session_state["people"][st.session_state["active_person"]] = {
+            "name": rec.get("이름", ""), "db_no": rec.get("DB번호", ""),
+            "calendar_type": calendar_type, "year": birth_y, "month": birth_m, "day": birth_d,
+            "gender_label": gender_label, "time_known": time_known, "time_idx": time_idx,
+        }
 
     st.selectbox(
         "🔍 저장된 사람 검색 (이름 입력하면 자동완성)",
         [_NOTION_PICK_SENTINEL] + _notion_rec_names,
         key="_notion_pick_select",
         on_change=_load_picked_notion_record,
-        help="이름을 치면 Notion에 저장된 기록이 필터링됩니다. 선택하면 저장된 원국을 바로 불러옵니다.",
+        help="이름을 치면 Notion에 저장된 기록이 필터링됩니다. 선택하면 생년월일시를 자동으로 채우고 사주를 바로 계산합니다.",
     )
     if st.session_state.get("_notion_pick_error"):
         st.error(f"불러오기 실패: {st.session_state.pop('_notion_pick_error')}")
