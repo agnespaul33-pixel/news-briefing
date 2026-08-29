@@ -32,10 +32,9 @@ def _secret(name: str) -> str:
 
 SAZU_API_KEY = _secret("SAZU_API_KEY")
 GEMINI_API_KEY = _secret("SAJU_GEMINI_API_KEY")
-# 주의: gemini-1.5-flash, gemini-2.5-flash-lite는 이미 이 계정에서 사용 불가(404).
-# gemini-2.5-flash는 2026-10-16 이후 종료 예정(Google 공식, 확정일은 6개월 전 재공지) —
-# 그때는 GEMINI_MODEL 환경변수로 gemini-3.6-flash 등으로 전환.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# 주의: gemini-1.5-flash는 이미 서비스 종료(404). gemini-2.5-flash는 2026-10-16 종료 예정.
+# 필요 시 GEMINI_MODEL 환경변수로 gemini-3.1-flash-lite 등으로 전환 테스트 가능.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 _missing = [n for n, v in (("SAZU_API_KEY", SAZU_API_KEY), ("SAJU_GEMINI_API_KEY", GEMINI_API_KEY)) if not v]
 if _missing:
@@ -59,9 +58,6 @@ ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "wat
 ELEMENT_KR_BY_HANJA = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
 PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
-# STEM_ELEMENT/BRANCH_ELEMENT(아래 정의)는 오행을 한자(木火土金水)로 반환하는데,
-# elem_count 등 집계용 딕셔너리는 한글 키(목화토금수)를 쓰므로 여기서 변환한다.
-HANJA_ELEMENT_TO_KR = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
 
 # ── 신살 조견표 (사주첩경 전통 방식: 역마·도화·화개는 연지 삼합 기준, 천을귀인은 일간 기준) ──
 BRANCH_CHARS = "子丑寅卯辰巳午未申酉戌亥"
@@ -90,32 +86,13 @@ CHEONEUL_TARGET = {
 }
 
 
-# SAZU API는 skyFull/earthFull을 한자가 아닌 한글로 반환한다(예: 일간 己=='기토', 일지 卯=='묘목').
-# 아래 두 매핑으로 한글→한자 역변환한다. "신"은 천간 辛과 지지 申이 둘 다 '신'으로 읽혀 충돌하므로,
-# 반드시 두 매핑을 분리해두고, 호출부가 넘긴 charset(STEM_CHARS 또는 BRANCH_CHARS)으로 어느 쪽인지
-# 문맥에 맞게 판별해야 한다(skyFull을 파싱할 땐 STEM_CHARS를 넘기므로 辛로, earthFull을 파싱할 땐
-# BRANCH_CHARS를 넘기므로 申으로 정확히 갈린다).
-STEM_HANGUL_TO_HANJA = {
-    "갑": "甲", "을": "乙", "병": "丙", "정": "丁", "무": "戊",
-    "기": "己", "경": "庚", "신": "辛", "임": "壬", "계": "癸",
-}
-BRANCH_HANGUL_TO_HANJA = {
-    "자": "子", "축": "丑", "인": "寅", "묘": "卯", "진": "辰", "사": "巳",
-    "오": "午", "미": "未", "신": "申", "유": "酉", "술": "戌", "해": "亥",
-}
-
-
 def _extract_char(text: str | None, charset: str) -> str | None:
-    """표시용 문자열(예: SAZU의 '기토', '묘목')에서 원본 한자 1글자를 추출."""
+    """표시용 문자열(예: '자(子)', '갑')에서 원본 한자 1글자를 추출."""
     if not text:
         return None
     for ch in text:
         if ch in charset:
             return ch
-        for hangul_map in (STEM_HANGUL_TO_HANJA, BRANCH_HANGUL_TO_HANJA):
-            mapped = hangul_map.get(ch)
-            if mapped and mapped in charset:
-                return mapped
     return None
 
 
@@ -1221,6 +1198,9 @@ def _accumulate_ganji_interaction(result: dict, label: str, s: str | None, b: st
 
 def format_wolwoon(wo_stem: str, wo_branch: str) -> str:
     return f"  월운 간지: {wo_stem}{wo_branch}"
+    if len(lines) == 1:
+        lines.append("  (원국·세운과 특별한 충돌 없음)")
+    return "\n".join(lines)
 
 
 def format_sinsal(sinsal: dict) -> str:
@@ -1280,6 +1260,28 @@ OHAENG_JEONWANG = [
     ("金", {"巳", "酉", "丑"}, "오행전왕격"),  # 종혁격
     ("水", {"申", "子", "辰"}, "오행전왕격"),  # 윤하격
 ]
+
+# 일지 성격표 (지니님 "사주 운세 보는 법" 자료 기준) — 일지 십성으로 바로 조회
+ILJI_SEONGGYEOK = {
+    "정관": "의젓, 관료적, 보수적, 공직",
+    "편관": "종교적, 자비의 사람, 외국관련일, 외국거주",
+    "식신": "천진난만, 순수, 운동선수, 기술자",
+    "상관": "과학적, 탐구적, 역술업, 여-배우자 운 약함",
+    "정인": "학문선호, 문서다루는 일",
+    "편인": "깐깐한 성격, 작가적 재능, 계약직",
+    "정재": "모범생, 인기많음, 남-여자에게 인기, 여-집에서 살림함",
+    "편재": "자유로운 영혼, 한탕주의, 부동산관련일",
+    "비견": "사람들과 함께하는 일, 의리적으로 손해봄",
+    "겁재": "돈을 좋아한다, 불굴의 의지, 현금 만지는 일",
+}
+# 십성 성격해석 파일과 소속 십성 매핑 — 이 사주에 해당 십성이 2개 이상(뚜렷) 있을 때만 로딩
+SIPSEONG_CATEGORY_FILES = {
+    "관성.md": ("정관", "편관"),
+    "식상.md": ("식신", "상관"),
+    "인성.md": ("정인", "편인"),
+    "재성.md": ("정재", "편재"),
+    "비겁.md": ("비견", "겁재"),
+}
 
 
 def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_score: float | None, gender_label: str) -> str:
@@ -1380,6 +1382,21 @@ def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_scor
     if hwahyeon:
         blocks.append(f"### [육친] 화현법 ({gender_label}명 기준)\n{hwahyeon}")
 
+    # 십성 성격해석 — 이 사주에 뚜렷하게(2개 이상) 있는 십성 카테고리만
+    sipseong_values = [v for k, v in sipseong.items() if k != "일간"]
+    for fname, names in SIPSEONG_CATEGORY_FILES.items():
+        count = sum(sipseong_values.count(n) for n in names)
+        if count >= 2:
+            text = _load_ref("sipseong", fname)
+            if text:
+                blocks.append(f"### [십성 성격해석] {'/'.join(names)} (사주 내 {count}회)\n{text}")
+
+    # 일지 성격 한 줄 — 항상 포함 (일지는 늘 존재)
+    ilji_sipseong = sipseong.get("일지")
+    ilji_desc = ILJI_SEONGGYEOK.get(ilji_sipseong)
+    if ilji_desc:
+        blocks.append(f"### [일지 성격] {ilji_sipseong}\n{ilji_desc}")
+
     return "\n\n".join(blocks)
 
 
@@ -1421,8 +1438,7 @@ HIGHLIGHT_COLOR = "#ff8a3d"
 
 
 def _char_elem_bg_color(ch: str, is_stem: bool) -> tuple[str, str]:
-    elem_hanja = STEM_ELEMENT.get(ch) if is_stem else BRANCH_ELEMENT.get(ch)
-    elem = HANJA_ELEMENT_TO_KR.get(elem_hanja)
+    elem = STEM_ELEMENT.get(ch) if is_stem else BRANCH_ELEMENT.get(ch)
     return ELEMENT_BG.get(elem, "#eeeeee"), ELEMENT_TEXT_ON_BG.get(elem, "#000000")
 
 
@@ -1601,17 +1617,7 @@ def render_daewoon_strip_from_sazu(dw_module: dict, current_age: int | None):
         if current_age is not None and item["startAge"] <= current_age < item["startAge"] + 10:
             current_idx = i
             break
-    # item["full"]은 SAZU가 한글로 주는 간지 표시문자열(예: "계미") — 색상 조회는 한자
-    # 기준(STEM_CHARS/BRANCH_CHARS)이므로 한글→한자로 변환해서 넘긴다.
-    rows = [
-        (
-            str(item["startAge"]),
-            STEM_HANGUL_TO_HANJA.get(item["full"][0], item["full"][0]),
-            BRANCH_HANGUL_TO_HANJA.get(item["full"][1], item["full"][1]),
-            "",
-        )
-        for item in display
-    ]
+    rows = [(str(item["startAge"]), item["full"][0], item["full"][1], "") for item in display]
     render_horizontal_strip(
         rows, current_idx,
         f"대운(大運) — {dw_module.get('direction', '')} · {dw_module.get('startAge', '?')}세부터",
