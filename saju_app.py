@@ -1957,6 +1957,7 @@ def save_saju_to_notion(name, db_no, gender_label, calendar_type, birth_str, tim
         return None, str(e)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def list_saju_from_notion():
     client = _get_notion_client()
     db_id = get_or_create_saju_database()
@@ -2017,13 +2018,15 @@ def show_db_list_dialog():
              "생년월일": r["생년월일"], "생시": r["생시"], "저장일": r["저장일"]}
             for r in records
         ]
-        st.dataframe(pd.DataFrame(table_rows), width='stretch', hide_index=True)
-
         names = [f"{r['이름']} ({r['생년월일']} {r['생시']})" for r in records]
-        picked = st.selectbox("불러오거나 삭제할 기록 선택", range(len(records)), format_func=lambda i: names[i])
 
-        c1, c2 = st.columns(2)
-        if c1.button("📖 이 기록 불러오기", width='stretch'):
+        st.caption("행을 클릭하면 바로 불러옵니다.")
+        event = st.dataframe(
+            pd.DataFrame(table_rows), width='stretch', hide_index=True,
+            on_select="rerun", selection_mode="single-row",
+        )
+        if event.selection.rows:
+            picked = event.selection.rows[0]
             try:
                 fp = json.loads(records[picked]["원국JSON"])
                 st.session_state["loaded_fp_from_notion"] = fp
@@ -2031,8 +2034,12 @@ def show_db_list_dialog():
                 st.rerun()
             except Exception as e:
                 st.error(f"불러오기 실패: {e}")
-        if c2.button("🗑️ 이 기록 삭제", width='stretch'):
-            if archive_saju_record(records[picked]["id"]):
+
+        st.divider()
+        picked_del = st.selectbox("삭제할 기록 선택", range(len(records)), format_func=lambda i: names[i])
+        if st.button("🗑️ 이 기록 삭제", width='stretch'):
+            if archive_saju_record(records[picked_del]["id"]):
+                list_saju_from_notion.clear()
                 st.success("삭제했습니다.")
                 st.rerun()
     except Exception as e:
@@ -2313,6 +2320,34 @@ with pcol3:
         st.session_state["active_person"] = list(st.session_state["people"].keys())[0]
         st.rerun()
 
+_NOTION_PICK_SENTINEL = "— 이름으로 저장된 기록 검색 —"
+_notion_records = list_saju_from_notion()
+if _notion_records:
+    _notion_rec_names = [f"{r['이름']} ({r['생년월일']} {r['생시']})" for r in _notion_records]
+
+    def _load_picked_notion_record():
+        label = st.session_state.get("_notion_pick_select")
+        if not label or label == _NOTION_PICK_SENTINEL:
+            return
+        idx = _notion_rec_names.index(label)
+        try:
+            fp = json.loads(_notion_records[idx]["원국JSON"])
+        except Exception as e:
+            st.session_state["_notion_pick_error"] = str(e)
+            return
+        st.session_state["loaded_fp_from_notion"] = fp
+        st.session_state["loaded_fp_label"] = label
+
+    st.selectbox(
+        "🔍 저장된 사람 검색 (이름 입력하면 자동완성)",
+        [_NOTION_PICK_SENTINEL] + _notion_rec_names,
+        key="_notion_pick_select",
+        on_change=_load_picked_notion_record,
+        help="이름을 치면 Notion에 저장된 기록이 필터링됩니다. 선택하면 저장된 원국을 바로 불러옵니다.",
+    )
+    if st.session_state.get("_notion_pick_error"):
+        st.error(f"불러오기 실패: {st.session_state.pop('_notion_pick_error')}")
+
 saved = st.session_state["people"].get(st.session_state["active_person"], {})
 
 with st.form("saju_form"):
@@ -2469,6 +2504,7 @@ if body:
             if _err:
                 st.error(f"저장 실패: {_err}")
             else:
+                list_saju_from_notion.clear()
                 st.success("Notion에 저장했습니다.")
     with hcol4:
         st.markdown("&nbsp;", unsafe_allow_html=True)
