@@ -56,7 +56,6 @@ SAZU_MODULES = [
 
 ELEMENT_ORDER = ["wood", "fire", "earth", "metal", "water"]
 ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "water": "수"}
-ELEMENT_KR_BY_HANJA = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
 PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
 # STEM_ELEMENT/BRANCH_ELEMENT(아래 정의)는 오행을 한자(木火土金水)로 반환하는데,
@@ -338,11 +337,7 @@ def compute_hyeongchunghae(fp: dict) -> dict:
 
 def format_hyeongchunghae(hch: dict) -> str:
     order = ["천간합", "육합", "삼합", "반합", "방합", "충", "형", "파", "해"]
-    lines = []
-    for name in order:
-        items = hch.get(name, [])
-        lines.append(f"  {name}: " + ("; ".join(items) if items else "없음"))
-    return "\n".join(lines)
+    return "\n".join(f"  {name}: " + "; ".join(hch[name]) for name in order if hch.get(name))
 
 
 # ── 십성(十星)·12운성(포태법) 결정적 계산 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ──
@@ -821,20 +816,12 @@ def compute_gyeokguk_teukjip(fp: dict, sipseong: dict) -> dict:
 
 def format_sinsal_extended(ext: dict) -> str:
     order = ["문창귀인", "암록", "금여", "양인살", "괴강살", "백호살", "원진살", "공망"]
-    lines = []
-    for name in order:
-        items = ext.get(name, [])
-        lines.append(f"  {name}: " + ("; ".join(items) if items else "없음"))
-    return "\n".join(lines)
+    return "\n".join(f"  {name}: " + "; ".join(ext[name]) for name in order if ext.get(name))
 
 
 def format_sinsal_extended2(ext: dict) -> str:
     order = ["귀문관살", "문곡귀인", "학당귀인", "급각살", "수옥살", "탕화살", "고란살", "낙정관살", "음양차착살"]
-    lines = []
-    for name in order:
-        items = ext.get(name, [])
-        lines.append(f"  {name}: " + ("; ".join(items) if items else "없음"))
-    return "\n".join(lines)
+    return "\n".join(f"  {name}: " + "; ".join(ext[name]) for name in order if ext.get(name))
 
 
 # ── 지장간·납음오행 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ────────
@@ -1232,9 +1219,11 @@ def format_sinsal(sinsal: dict) -> str:
             pillars = by_base.get(base_label, [])
             if pillars:
                 found.append(f"{', '.join(pillars)}[{base_label}]")
-        lines.append(f"  {name}: " + ("있음 (" + "; ".join(found) + ")" if found else "없음"))
+        if found:
+            lines.append(f"  {name}: 있음 (" + "; ".join(found) + ")")
     pillars = sinsal.get("천을귀인", [])
-    lines.append("  천을귀인: " + ("있음 (" + ", ".join(pillars) + ")" if pillars else "없음"))
+    if pillars:
+        lines.append("  천을귀인: 있음 (" + ", ".join(pillars) + ")")
     return "\n".join(lines)
 
 
@@ -1463,107 +1452,30 @@ def _char_elem_bg_color(ch: str, is_stem: bool) -> tuple[str, str]:
     return ELEMENT_BG.get(elem, "#eeeeee"), ELEMENT_TEXT_ON_BG.get(elem, "#000000")
 
 
-SINSAL_HANJA = {
-    "역마": "驛馬", "도화": "桃花", "화개": "華蓋", "천을귀인": "天乙",
-    "문창귀인": "文昌", "암록": "暗祿", "금여": "金輿", "양인살": "羊刃",
-    "괴강살": "魁罡", "백호살": "白虎", "원진살": "怨嗔", "공망": "空亡",
-    "귀문관살": "鬼門", "문곡귀인": "文曲", "학당귀인": "學堂", "급각살": "急脚",
-    "수옥살": "囚獄", "탕화살": "湯火", "고란살": "孤鸞", "낙정관살": "落井",
-    "음양차착살": "差錯",
-}
-
-
-def sinsal_hanja_by_pillar(fp: dict) -> dict:
-    """신살을 연지·월지·일지·시지 기둥별로 묶어 한자 태그로 반환.
-
-    반환: {"연지": ["驛馬","空亡"], "월지": [...], "일지": [...], "시지": [...]}
-    """
-    result = {"연지": [], "월지": [], "일지": [], "시지": []}
-
-    sinsal = compute_sinsal(fp)
-    for name in ("역마", "도화", "화개"):
-        by_base = sinsal.get(name, {})
-        for base in ("연지기준", "일지기준"):
-            for pillar_label in by_base.get(base, []):
-                if pillar_label in result:
-                    result[pillar_label].append(SINSAL_HANJA[name])
-    for pillar_label in sinsal.get("천을귀인", []):
-        if pillar_label in result:
-            result[pillar_label].append(SINSAL_HANJA["천을귀인"])
-
-    ext = compute_sinsal_extended(fp)
-    for name in ("문창귀인", "암록", "금여", "양인살", "공망"):
-        for item in ext.get(name, []):
-            for key in result:
-                if item.startswith(key):  # 공망은 "연지(亥)"처럼 지지값이 뒤에 붙어 나옴
-                    result[key].append(SINSAL_HANJA[name])
-                    break
-
-    zhu_to_ji = {"연주": "연지", "월주": "월지", "일주": "일지", "시주": "시지"}
-    for name in ("괴강살", "백호살"):
-        for zhu_label in ext.get(name, []):
-            ji_label = zhu_to_ji.get(zhu_label)
-            if ji_label:
-                result[ji_label].append(SINSAL_HANJA[name])
-
-    for item in ext.get("원진살", []):
-        prefix = item.split(" ")[0]  # 예: "연지-월지"
-        for key in result:
-            if key in prefix:
-                result[key].append(SINSAL_HANJA["원진살"])
-
-    # 신살 확장 2차 (귀문관살 등 9종)
-    ext2 = compute_sinsal_extended2(fp)
-    for name in ("문곡귀인", "학당귀인", "급각살", "수옥살", "탕화살"):
-        for item in ext2.get(name, []):
-            if item in result:
-                result[item].append(SINSAL_HANJA[name])
-    for item in ext2.get("귀문관살", []):  # "일지-연지" 형태
-        for key in result:
-            if key in item:
-                result[key].append(SINSAL_HANJA["귀문관살"])
-    for name in ("고란살", "음양차착살"):  # "일주"/"시주" 형태
-        for zhu_label in ext2.get(name, []):
-            ji_label = zhu_to_ji.get(zhu_label)
-            if ji_label:
-                result[ji_label].append(SINSAL_HANJA[name])
-    for item in ext2.get("낙정관살", []):  # 이미 "일지"/"시지" 형태
-        if item in result:
-            result[item].append(SINSAL_HANJA["낙정관살"])
-
-    return result
-
-
 def render_saju_dashboard_table(fp: dict):
-    """시-일-월-연 순서로 십성·간지·신살·지장간·오행분포를 압축 표 하나로 렌더링."""
+    """시-일-월-연 순서로 십성·간지·지장간·오행분포를 압축 표 하나로 렌더링."""
     order = ["hour", "day", "month", "year"]
     sipseong = compute_sipseong(fp)
     jjg = compute_jijanggan(fp)
-    sinsal_by_pillar = sinsal_hanja_by_pillar(fp)
     stem_label = {"hour": "시간", "day": "일간", "month": "월간", "year": "연간"}
     branch_label = {"hour": "시지", "day": "일지", "month": "월지", "year": "연지"}
 
     def lab(text):
         return f'<td style="text-align:center;font-size:.82rem;padding:4px;color:#555;">{text}</td>'
 
-    def sinsal_cell(tags):
-        text = " ".join(tags) if tags else "-"
-        return (f'<td style="text-align:center;font-size:.78rem;padding:3px;'
-                f'color:#b25a00;font-weight:600;">{text}</td>')
-
     def big(ch, is_stem):
         bg, color = _char_elem_bg_color(ch, is_stem)
         return (f'<td style="background:{bg};color:{color};text-align:center;'
                 f'font-size:1.5rem;font-weight:700;padding:10px 4px;">{ch}</td>')
 
-    top, stems, branches, sinsal_row, bottom, jjgs = [], [], [], [], [], []
+    top, stems, branches, bottom, jjgs = [], [], [], [], []
     elem_count = {"木": 0, "火": 0, "土": 0, "金": 0, "水": 0}
 
     for key in order:
         p = fp.get(key)
         if p is None:
             top.append(lab("-")); stems.append(big("-", True))
-            branches.append(big("-", False)); sinsal_row.append(sinsal_cell([]))
+            branches.append(big("-", False))
             bottom.append(lab("-")); jjgs.append(lab("-"))
             continue
         s = _extract_char(p.get("skyFull"), STEM_CHARS)
@@ -1571,7 +1483,6 @@ def render_saju_dashboard_table(fp: dict):
         top.append(lab("일원" if key == "day" else sipseong.get(stem_label[key], "-")))
         stems.append(big(s or "-", True))
         branches.append(big(b or "-", False))
-        sinsal_row.append(sinsal_cell(sinsal_by_pillar.get(branch_label[key], [])))
         bottom.append(lab(sipseong.get(branch_label[key], "-")))
         pairs = jjg.get(branch_label[key], [])
         jjgs.append(lab("".join(st for st, _ in pairs)))
@@ -1581,14 +1492,14 @@ def render_saju_dashboard_table(fp: dict):
             elem_count[BRANCH_ELEMENT[b]] += 1
 
     elem_row = "".join(
-        f'<td style="text-align:center;font-size:.82rem;padding:4px;">{ELEMENT_KR_BY_HANJA[e]}({elem_count[e]})</td>'
+        f'<td style="text-align:center;font-size:.82rem;padding:4px;">{e}({elem_count[e]})</td>'
         for e in ("木", "火", "土", "金", "水")
     )
 
     st.markdown(
         f"""<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
 <tr>{''.join(top)}</tr><tr>{''.join(stems)}</tr><tr>{''.join(branches)}</tr>
-<tr>{''.join(sinsal_row)}</tr><tr>{''.join(bottom)}</tr><tr>{''.join(jjgs)}</tr>
+<tr>{''.join(bottom)}</tr><tr>{''.join(jjgs)}</tr>
 </table>
 <table style="width:100%;border-collapse:collapse;margin-top:2px;border-top:1px solid #ddd;table-layout:fixed;">
 <tr>{elem_row}</tr></table>""",
@@ -1715,14 +1626,14 @@ def render_sinsal_badges(fp: dict):
 
 
 def render_hyeongchunghae_summary(fp: dict):
-    """충·형·파·해만 간단히 요약 (합은 신살 성격이 아니라 제외) — 레퍼런스의 '破(亥寅)' 식 표기."""
+    """합·충·형·파·해를 간단히 요약(있는 것만) — 레퍼런스의 '破(亥寅)' 식 표기."""
     hch = compute_hyeongchunghae(fp)
     tags = []
-    for name in ("충", "형", "파", "해"):
+    for name in ("천간합", "육합", "삼합", "반합", "방합", "충", "형", "파", "해"):
         for item in hch.get(name, []):
             tags.append(f"{name}({item})")
     if not tags:
-        st.caption("충·형·파·해 없음")
+        st.caption("해당하는 합·충·형·파·해 없음")
         return
     st.markdown(" · ".join(tags))
 
@@ -1796,28 +1707,41 @@ def show_sinsal_dialog(fp: dict, body: dict | None = None):
         st.divider()
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("**십성**")
+            st.text(format_sipseong(compute_sipseong(fp)))
+        with c2:
             st.markdown("**12운성**")
             st.text(format_twelve_stages(compute_twelve_stages(fp)))
-        with c2:
-            st.markdown("**월령(月令)**")
-            month_branch = _extract_char((fp.get("month") or {}).get("earthFull"), BRANCH_CHARS)
-            civil_dt = get_solar_birth_datetime(body) if body else None
-            if month_branch and civil_dt:
-                result = compute_wollyeong(month_branch, civil_dt)
-                if result:
-                    stem, stage, days, jeol_name, jeol_dt = result
-                    st.markdown(f"**{stem}**({stage}) — {jeol_name}로부터 {days}일째")
-                else:
-                    st.caption("계산 불가")
+
+        st.divider()
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("**지장간(여기·중기·정기)**")
+            st.text(format_jijanggan(compute_jijanggan(fp)))
+        with c4:
+            st.markdown("**납음오행**")
+            st.text(format_nayin(compute_nayin(fp)))
+
+        st.divider()
+        st.markdown("**월령(月令)**")
+        month_branch = _extract_char((fp.get("month") or {}).get("earthFull"), BRANCH_CHARS)
+        civil_dt = get_solar_birth_datetime(body) if body else None
+        if month_branch and civil_dt:
+            result = compute_wollyeong(month_branch, civil_dt)
+            if result:
+                stem, stage, days, jeol_name, jeol_dt = result
+                st.markdown(f"**{stem}**({stage}) — {jeol_name}로부터 {days}일째")
             else:
-                st.caption("시간 미상이라 계산 불가")
+                st.caption("계산 불가")
+        else:
+            st.caption("시간 미상이라 계산 불가")
 
         st.divider()
         st.markdown("**신살** (있는 것만 표시)")
         render_sinsal_badges(fp)
 
         st.divider()
-        st.markdown("**충·형·파·해**")
+        st.markdown("**합·충·형·파·해** (있는 것만 표시)")
         render_hyeongchunghae_summary(fp)
 
         st.caption("원광만세력·루시아만세력과 대조해보세요.")
@@ -2599,46 +2523,6 @@ if body:
     st.caption(f"{dw['direction']} · {dw['startAge']}세부터 시작 · 기준 절기: {dw.get('basisTermsName', '-')}")
     cur_age = modules.get("summary", {}).get("fortunePhase", {}).get("current", {}).get("age")
     st.dataframe(daewoon_dataframe(dw, cur_age), width='stretch', hide_index=True)
-
-    st.divider()
-    st.subheader("🔧 확장 분석 — 자체 계산 (검증용)")
-    st.caption(
-        "SAZU와 무관하게 지니님 코드로 직접 계산한 결과입니다. "
-        "원광만세력·루시아만세력과 대조해서 정확도를 확인해주세요. "
-        "AI 해석 프롬프트에는 아직 반영되지 않았습니다(신살 4종만 예외)."
-    )
-    tab1, tab2, tab3, tab4 = st.tabs(["신살", "형충파해", "십성·12운성", "지장간·납음오행"])
-
-    with tab1:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**역마·도화·화개·천을귀인**")
-            st.text(format_sinsal(compute_sinsal(fp)))
-        with c2:
-            st.markdown("**문창귀인·암록·금여·양인·괴강·백호·원진·공망**")
-            st.text(format_sinsal_extended(compute_sinsal_extended(fp)))
-
-    with tab2:
-        st.markdown("**천간합·육합·삼합·반합·방합·충·형·파·해**")
-        st.text(format_hyeongchunghae(compute_hyeongchunghae(fp)))
-
-    with tab3:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**십성**")
-            st.text(format_sipseong(compute_sipseong(fp)))
-        with c2:
-            st.markdown("**12운성**")
-            st.text(format_twelve_stages(compute_twelve_stages(fp)))
-
-    with tab4:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**지장간(여기·중기·정기)**")
-            st.text(format_jijanggan(compute_jijanggan(fp)))
-        with c2:
-            st.markdown("**납음오행**")
-            st.text(format_nayin(compute_nayin(fp)))
 
     tier = body["meta"].get("tier")
     if tier == "free":
