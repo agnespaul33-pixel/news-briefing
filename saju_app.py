@@ -1927,7 +1927,7 @@ def _readable_fp(fp: dict) -> str:
     return " ".join(parts) if parts else "-"
 
 
-def save_saju_to_notion(name, db_no, gender_label, calendar_type, birth_str, time_str, fp):
+def save_saju_to_notion(name, gender_label, calendar_type, birth_str, time_str, fp):
     client = _get_notion_client()
     db_id = get_or_create_saju_database()
     if client is None:
@@ -1942,7 +1942,6 @@ def save_saju_to_notion(name, db_no, gender_label, calendar_type, birth_str, tim
             parent={"database_id": db_id},
             properties={
                 "이름": {"title": [{"text": {"content": name or "(이름없음)"}}]},
-                "DB번호": {"rich_text": [{"text": {"content": db_no or ""}}]},
                 "성별": {"select": {"name": gender_label}},
                 "달력": {"select": {"name": calendar_type}},
                 "생년월일": {"rich_text": [{"text": {"content": birth_str}}]},
@@ -2371,7 +2370,7 @@ if _notion_records:
         st.session_state.pop("loaded_fp_from_notion", None)
         st.session_state.pop("loaded_fp_label", None)
         st.session_state["people"][st.session_state["active_person"]] = {
-            "name": rec.get("이름", ""), "db_no": rec.get("DB번호", ""),
+            "name": rec.get("이름", ""),
             "calendar_type": calendar_type, "year": birth_y, "month": birth_m, "day": birth_d,
             "gender_label": gender_label, "time_known": time_known, "time_idx": time_idx,
         }
@@ -2389,9 +2388,7 @@ if _notion_records:
 saved = st.session_state["people"].get(st.session_state["active_person"], {})
 
 with st.form("saju_form"):
-    ncol1, ncol2 = st.columns([3, 1])
-    name = ncol1.text_input("이름", value=saved.get("name", ""))
-    db_no = ncol2.text_input("DB번호", value=saved.get("db_no", ""), help="Notion 연동 시 저장 식별자로 사용 예정")
+    name = st.text_input("이름", value=saved.get("name", ""))
 
     c1, c2, c3 = st.columns([1.3, 2, 1])
     with c1:
@@ -2425,7 +2422,7 @@ with st.form("saju_form"):
 if submitted:
     # 이 인물의 입력값을 세션에 저장해 다음에 이 인물로 돌아와도 유지되게 함
     st.session_state["people"][st.session_state["active_person"]] = {
-        "name": name, "db_no": db_no, "calendar_type": calendar_type,
+        "name": name, "calendar_type": calendar_type,
         "year": int(year), "month": int(month), "day": int(day),
         "gender_label": gender_label, "time_known": time_known, "time_idx": time_idx,
     }
@@ -2536,7 +2533,7 @@ if body:
             _time_str = _time_note
             _person = st.session_state["people"].get(st.session_state["active_person"], {})
             _pid, _err = save_saju_to_notion(
-                _person.get("name", ""), _person.get("db_no", ""),
+                _person.get("name", ""),
                 "여" if inp["isFemale"] else "남", _cal_type, _birth_str, _time_str, fp,
             )
             if _err:
