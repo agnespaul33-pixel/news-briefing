@@ -474,9 +474,20 @@ def compute_twelve_stages(fp: dict) -> dict:
     return result
 
 
-def format_twelve_stages(stages: dict) -> str:
-    order = ["연지", "월지", "일지", "시지"]
-    return "\n".join(f"  {k}: {stages.get(k, '-')}" for k in order if k in stages)
+def render_twelve_stages_detail(fp: dict):
+    """12운성을 각 지지의 SAZU 해석(키워드)과 함께 표시. 해석 데이터가 없으면 단계만 표시."""
+    stages = compute_twelve_stages(fp)
+    labels = [("year", "연지"), ("month", "월지"), ("day", "일지"), ("hour", "시지")]
+    lines = []
+    for key, label in labels:
+        if label not in stages:
+            continue
+        tfi = (fp.get(key) or {}).get("twelveFortuneInterpretation") or {}
+        line = f"  {label}: {stages[label]}"
+        if tfi.get("keyword"):
+            line += f" ({tfi['keyword']})"
+        lines.append(line)
+    st.text("\n".join(lines))
 
 
 # ── 신살 확장 8종 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ──────────
@@ -893,10 +904,6 @@ def compute_nayin(fp: dict) -> dict:
             result[labels[key]] = NAYIN_TABLE.get(pillar, "?")
     return result
 
-
-def format_nayin(nayin: dict) -> str:
-    order = ["연주", "월주", "일주", "시주"]
-    return "\n".join(f"  {k}: {nayin.get(k, '-')}" for k in order if k in nayin)
 
 
 # ── 출생시각 역사적 보정 — 서머타임 + 표준시 기준 변경 ──────────────────────────
@@ -1631,11 +1638,7 @@ def show_sinsal_dialog(fp: dict, body: dict | None = None):
 
         st.divider()
         st.markdown("**12운성**")
-        st.text(format_twelve_stages(compute_twelve_stages(fp)))
-
-        st.divider()
-        st.markdown("**납음오행**")
-        st.text(format_nayin(compute_nayin(fp)))
+        render_twelve_stages_detail(fp)
 
         st.divider()
         st.markdown("**신살**")
