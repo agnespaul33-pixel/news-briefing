@@ -1613,7 +1613,7 @@ def render_sinsal_badges(fp: dict):
         st.caption("해당하는 신살 없음")
         return
     badge_html = " ".join(
-        f'<span style="display:inline-block;background:#fff3e0;color:#7a3e00;border:1px solid #ffb74d;'
+        f'<span style="display:inline-block;background:#fff3e0;color:#3d1f00;border:1px solid #ffb74d;'
         f'border-radius:14px;padding:4px 10px;margin:3px 3px 0 0;font-size:.82rem;">{b}</span>'
         for b in badges
     )
