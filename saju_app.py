@@ -1883,13 +1883,18 @@ def pillar_card(label: str, pillar: dict | None):
     earth_c = ELEMENT_COLOR.get(pillar["earthElement"], "#898781")
     tfi = pillar.get("twelveFortuneInterpretation") or {}
 
+    sky_stem = _extract_char(pillar.get("skyFull"), STEM_CHARS)
+    earth_branch = _extract_char(pillar.get("earthFull"), BRANCH_CHARS)
+    sky_hanja = sky_stem + STEM_ELEMENT[sky_stem] if sky_stem else pillar["skyFull"]
+    earth_hanja = earth_branch + BRANCH_ELEMENT[earth_branch] if earth_branch else pillar["earthFull"]
+
     st.markdown(
         f"""
 <div style="border:1px solid rgba(128,128,128,.3); border-radius:12px; padding:16px; text-align:center;">
   <div style="font-size:.8rem; opacity:.65; margin-bottom:8px;">{label}</div>
   <div style="font-size:1.7rem; font-weight:700; line-height:1.35;">
-    <span style="color:{sky_c}">{pillar['skyFull']}</span><br/>
-    <span style="color:{earth_c}">{pillar['earthFull']}</span>
+    <span style="color:{sky_c}">{sky_hanja}</span><br/>
+    <span style="color:{earth_c}">{earth_hanja}</span>
   </div>
   <div style="font-size:.78rem; margin-top:10px; opacity:.85;">
     십성 {pillar['sippiSeong']}·{pillar['earthSippiSeong']} &nbsp;|&nbsp; 12운성 {pillar['twelveStage']}
