@@ -6,6 +6,7 @@
 
 import json
 import os
+import time
 from datetime import datetime, timedelta
 
 import altair as alt
@@ -28,6 +29,18 @@ def _secret(name: str) -> str:
     except Exception:
         val = None
     return val or os.environ.get(name, "")
+
+
+def show_friendly_error(customer_message: str, exc: Exception | str | None = None):
+    """고객에게는 친절한 한 줄 메시지만 보여주고, 기술적 원인은 접힌 상세보기에 남겨둔다.
+
+    customer_message: 고객이 보는 안내 문구 (원인·해결 방향 포함, 기술 용어 없이)
+    exc: 실제 예외 또는 에러 텍스트 — 운영자가 나중에 원인 파악할 때만 필요
+    """
+    st.error(f"⚠️ {customer_message}")
+    if exc is not None:
+        with st.expander("자세히 보기 (운영자 확인용)"):
+            st.code(str(exc), language=None)
 
 
 SAZU_API_KEY = _secret("SAZU_API_KEY")
@@ -1589,7 +1602,7 @@ def render_sinsal_badges(fp: dict):
         ext = compute_sinsal_extended(fp)
         ext2 = compute_sinsal_extended2(fp)
     except Exception as e:
-        st.error(f"신살 계산 실패: {e}")
+        show_friendly_error("신살을 계산하는 중 문제가 발생했습니다.", e)
         return
     badges = []
     for name in ("역마", "도화", "화개"):
@@ -1651,7 +1664,7 @@ def show_sinsal_dialog(fp: dict, body: dict | None = None):
             order = ["연주", "월주", "일주", "시주"]
             st.text("\n".join(f"  {k}: {nayin[k]}" for k in order if k in nayin))
         except Exception as e:
-            st.error(f"납음오행 계산 실패: {e}")
+            show_friendly_error("납음오행을 계산하는 중 문제가 발생했습니다.", e)
 
         st.divider()
         st.markdown("**신살**")
@@ -1663,7 +1676,7 @@ def show_sinsal_dialog(fp: dict, body: dict | None = None):
 
         st.caption("원광만세력·루시아만세력과 대조해보세요.")
     except Exception as e:
-        st.exception(e)  # 팝업이 비어 보이는 문제 재발 시 원인을 바로 보여줌
+        show_friendly_error("상세 정보를 불러오는 중 문제가 발생했습니다. 다시 시도해주세요.", e)
 
 
 # ── Notion 저장/조회/삭제 — 기존 NOTION_TOKEN·NOTION_PAGE_ID(자동화 작업실) 재사용 ──────
@@ -1728,7 +1741,7 @@ def get_or_create_saju_database():
         _notion_db_id_cache = new_db["id"]
         return new_db["id"]
     except Exception as e:
-        st.error(f"Notion 데이터베이스 준비 실패: {e}")
+        show_friendly_error("저장 공간을 준비하는 중 문제가 발생했습니다.", e)
         return None
 
 
@@ -1830,7 +1843,7 @@ def list_saju_from_notion():
             })
         return records
     except Exception as e:
-        st.error(f"Notion 조회 실패: {e}")
+        show_friendly_error("저장된 기록을 불러오는 중 문제가 발생했습니다.", e)
         return []
 
 
@@ -1842,7 +1855,7 @@ def archive_saju_record(page_id):
         client.pages.update(page_id=page_id, archived=True)
         return True
     except Exception as e:
-        st.error(f"삭제 실패: {e}")
+        show_friendly_error("삭제 중 문제가 발생했습니다.", e)
         return False
 
 
@@ -1873,7 +1886,7 @@ def show_db_list_dialog():
                 st.session_state["loaded_fp_label"] = names[picked]
                 st.rerun()
             except Exception as e:
-                st.error(f"불러오기 실패: {e}")
+                show_friendly_error("기록을 불러오는 중 문제가 발생했습니다.", e)
 
         st.divider()
         picked_del = st.selectbox("삭제할 기록 선택", range(len(records)), format_func=lambda i: names[i])
@@ -1883,7 +1896,7 @@ def show_db_list_dialog():
                 st.success("삭제했습니다.")
                 st.rerun()
     except Exception as e:
-        st.exception(e)
+        show_friendly_error("목록을 불러오는 중 문제가 발생했습니다.", e)
 
 
 def pillar_card(label: str, pillar: dict | None):
@@ -2038,7 +2051,7 @@ def format_sazu_context(body: dict) -> str:
 
     refs = collect_references(fp, sinsal_result, sipseong, ss.get("score"), "여" if inp["isFemale"] else "남")
     if refs:
-        lines.append("\n[지니님 사주첩경 요약 — 이 사주에 해당하는 부분만 적용]")
+        lines.append("\n[판단 기준 자료 — 이 사주에 해당하는 부분만 적용]")
         lines.append(refs)
 
     # Pro 전용 모듈 — 발급된 경우에만 원문 그대로 첨부(무료 플랜은 비어있음). 격국·용신 판단의
@@ -2060,8 +2073,8 @@ def make_prompt(body: dict, gender_label: str) -> str:
     spouse_star = "재성(財星)" if gender_label == "남" else "관성(官星)"
 
     return f"""당신은 사주첩경(四柱捷徑)의 저자 이석영 선생과 자평진전(子平眞詮)에 정통한 명리학자입니다.
-아래 【 SAZU 계산 결과 】를 근거로 삼아, 재계산 없이 그대로 인용하며 해석만 하십시오. 특히 십성·12운성·납음·지장간·신살·형충파해는 지니님이 실제 만세력 앱과 대조해 검증한 자체 계산 결과이니 반드시 그대로 신뢰하고, 절대 스스로 재계산하거나 다른 값으로 바꾸지 마십시오.
-【 지니님 사주첩경 요약 】이 컨텍스트에 포함되어 있으면, 그 판단 기준을 일반 명리 지식보다 최우선으로 따르십시오. 실제 원문을 인용하는 것처럼 문장을 지어내지 말고, 판단 기준으로만 활용해 당신의 말로 풀이하십시오.
+아래 【 SAZU 계산 결과 】를 근거로 삼아, 재계산 없이 그대로 인용하며 해석만 하십시오. 특히 십성·12운성·납음·지장간·신살·형충파해는 실제 만세력 앱과 대조해 검증한 자체 계산 결과이니 반드시 그대로 신뢰하고, 절대 스스로 재계산하거나 다른 값으로 바꾸지 마십시오.
+【 판단 기준 자료 】가 컨텍스트에 포함되어 있으면, 그 판단 기준을 일반 명리 지식보다 최우선으로 따르십시오. 실제 원문을 인용하는 것처럼 문장을 지어내지 말고, 판단 기준으로만 활용해 당신의 말로 풀이하십시오.
 
 ═══════════════════════════════════════
 【 SAZU 계산 결과 】
@@ -2069,15 +2082,16 @@ def make_prompt(body: dict, gender_label: str) -> str:
 ═══════════════════════════════════════
 
 【 서술 원칙 — 반드시 지킬 것 】
-1. **근거 기반**: 모든 문장은 위 【 SAZU 계산 결과 】 또는 【 지니님 사주첩경 요약 】에 실제로 나온 값(신살명·격국명·십성명·형충관계·오행 등)을 최소 하나 이상 직접 언급하며 전개하십시오. 근거를 못 대는 일반론·추상적 미사여구는 쓰지 마십시오.
+1. **근거 기반**: 모든 문장은 위 【 SAZU 계산 결과 】 또는 【 판단 기준 자료 】에 실제로 나온 값(신살명·격국명·십성명·형충관계·오행 등)을 최소 하나 이상 직접 언급하며 전개하십시오. 근거를 못 대는 일반론·추상적 미사여구는 쓰지 마십시오.
 2. **고전과 현대의 자연스러운 통합**: 신살명·격국명 같은 고전 용어를 언급할 땐, 용어만 던지고 끝내지 말고 **바로 이어지는 문장에서** "이는 현대적으로 ~한 경향/상황을 뜻한다"처럼 즉시 풀어써서, 용어와 해설이 하나의 흐름으로 읽히게 하십시오. 용어 나열 문단과 해설 문단을 따로 떼어놓지 마십시오.
 3. **길이는 근거량을 따름**: 항목별 문장수를 인위적으로 맞추지 마십시오. 그 항목에 해당하는 근거(신살·형충파해 등)가 많으면 그만큼 충분히 풀어 쓰고, 근거가 적거나 없으면 짧게 끝내십시오. 있지도 않은 근거를 늘리려고 사족을 붙이지 마십시오.
 4. **여러 자료가 동시에 로딩됐을 때는 나열하지 말고 종합**: 예를 들어 살인상생·탐재괴인·특정 십성 성격이 동시에 해당하면, 이를 "1)~ 2)~ 3)~"처럼 각각 따로 설명하지 말고, 이 사람의 삶의 결(성격·직업·관계 경향)로 자연스럽게 엮어서 하나의 인물상으로 그려내십시오.
 5. 흉(凶)한 내용은 "~한 경향이 있으니 ~하게 대비하면 좋다"처럼 완곡하고 건설적으로 표현하십시오.
+6. **내부 자료 출처를 절대 언급하지 마십시오**: "SAZU", "계산 결과", "판단 기준 자료", "~자료에 따르면", "~요약에 의하면" 같은 표현을 해석문에 절대 쓰지 마십시오. 이 라벨들은 참고자료를 구분하기 위한 내부 표시일 뿐, 고객이 보는 최종 해석문에는 마치 처음부터 명리학자 본인이 직접 판단한 것처럼 자연스럽게 서술하십시오. (예: "자료에 따르면 편관격이다" ❌ → "편관격(偏官格)이다" ⭕)
 
 다음 항목을 순서대로 작성하십시오 (항목 제목 외의 수식어·서론 생략, 바로 본문):
 
-▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준). 판정 시 [형충파해] 결과를 함께 보고, 득지·득세에 쓰인 지지·천간이 충·형·파·해·합에 걸려 있으면 그만큼 감점하여 반영하라. [지니님 사주첩경 요약]에 강약 6단계 퍼센트 기준표가 있으면 그 구간(쇠극/태쇠/쇠/왕/태왕/왕극)에 맞춰 용신 전략을 정하라.
+▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준). 판정 시 [형충파해] 결과를 함께 보고, 득지·득세에 쓰인 지지·천간이 충·형·파·해·합에 걸려 있으면 그만큼 감점하여 반영하라. [판단 기준 자료]에 강약 6단계 퍼센트 기준표가 있으면 그 구간(쇠극/태쇠/쇠/왕/태왕/왕극)에 맞춰 용신 전략을 정하라.
 ▶ 2. 대운(大運) 해석: 현재·다음 대운 위주로 길흉과 그 이유.
 ▶ 3. 신살(神殺): 위 [신살] 계열 결과를 그대로 인용하라(재계산 금지). "있음"인 항목만 골라 현대적 의미로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 짧게 끝내라.
 ▶ 4. 형충파해(刑沖破害): 위 [형충파해] 결과를 그대로 인용하라(재계산 금지). "없음"이 아닌 것만 골라 이 사주에 미치는 실질적 영향을 서술. 전부 없으면 "형충파해 없이 원국이 안정적"이라고 짧게 끝내라.
@@ -2089,19 +2103,40 @@ def make_prompt(body: dict, gender_label: str) -> str:
 ※ 사주첩경·자평진전 등 원문에 실제로 없는 문장을 지어내 따옴표로 인용하지 마십시오. 원리를 설명할 때는 "~라는 원칙에 따라"처럼 서술하고, 직접 인용 형식은 쓰지 마십시오."""
 
 
-def call_gemini_stream(prompt: str):
+def call_gemini_stream(prompt: str, max_retries: int = 2):
+    """Gemini 스트리밍 호출. 503/timeout 같은 일시적 오류는 자동으로 재시도한다.
+
+    단, 스트리밍이 이미 시작되어 일부 텍스트를 고객에게 보여준 뒤에 실패하면
+    (부분 재시도는 내용이 꼬일 수 있어) 그대로 예외를 전달한다 — 아직 아무것도
+    보여주기 전(첫 청크 받기 전)의 실패만 재시도 대상이다.
+    """
     client = genai.Client(api_key=GEMINI_API_KEY)
-    for chunk in client.models.generate_content_stream(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=genai_types.GenerateContentConfig(
-            temperature=0.8,
-            max_output_tokens=4096,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-        ),
-    ):
-        if chunk.text:
-            yield chunk.text
+    config = genai_types.GenerateContentConfig(
+        temperature=0.8,
+        max_output_tokens=4096,
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+    )
+
+    attempt = 0
+    while True:
+        first_chunk_yielded = False
+        try:
+            for chunk in client.models.generate_content_stream(
+                model=GEMINI_MODEL, contents=prompt, config=config,
+            ):
+                first_chunk_yielded = True
+                if chunk.text:
+                    yield chunk.text
+            return
+        except Exception as e:
+            msg = str(e)
+            is_transient = ("503" in msg or "UNAVAILABLE" in msg or "timed out" in msg.lower()
+                             or "429" in msg or "RESOURCE_EXHAUSTED" in msg)
+            if is_transient and not first_chunk_yielded and attempt < max_retries:
+                attempt += 1
+                time.sleep(1.5 * attempt)  # 1.5초, 3초로 점점 늘려가며 대기 후 재시도
+                continue
+            raise
 
 
 # ── UI ────────────────────────────────────────────────────────────────────
@@ -2220,7 +2255,7 @@ if _notion_records:
         help="이름을 치면 Notion에 저장된 기록이 필터링됩니다. 선택하면 생년월일시를 자동으로 채우고 사주를 바로 계산합니다.",
     )
     if st.session_state.get("_notion_pick_error"):
-        st.error(f"불러오기 실패: {st.session_state.pop('_notion_pick_error')}")
+        show_friendly_error("기록을 불러오는 중 문제가 발생했습니다.", st.session_state.pop('_notion_pick_error'))
 
 saved = st.session_state["people"].get(st.session_state["active_person"], {})
 
@@ -2283,8 +2318,11 @@ if submitted:
                     birth_year, birth_month, birth_day = shifted.year, shifted.month, shifted.day
                     is_lunar_input = False  # 변환 완료 — 이후 SAZU에는 양력으로 전달
                 except Exception as e:
-                    st.error(f"음력→양력 변환 실패로 자시(통합) 날짜 이동을 적용하지 못했습니다: {e}"
-                              " 조자시/야자시를 직접 선택해주세요.")
+                    show_friendly_error(
+                        "자시(통합) 날짜 변환 중 문제가 발생했습니다."
+                        " 아래에서 조자시 또는 야자시를 직접 선택해서 다시 시도해주세요.",
+                        e,
+                    )
                     st.stop()
             else:
                 shifted = datetime(birth_year, birth_month, birth_day) + timedelta(days=day_offset)
@@ -2310,7 +2348,11 @@ if submitted:
         try:
             body = call_sazu(payload)
         except RuntimeError as e:
-            st.error(str(e))
+            show_friendly_error(
+                "사주 계산 서버에 일시적으로 연결이 안 됩니다. 잠시 후 다시 시도해주세요."
+                " 계속 반복되면 문의해주세요.",
+                e,
+            )
             st.stop()
 
     st.session_state["sazu_body"] = body
@@ -2374,7 +2416,7 @@ if body:
                 "여" if inp["isFemale"] else "남", _cal_type, _birth_str, _time_str, fp,
             )
             if _err:
-                st.error(f"저장 실패: {_err}")
+                show_friendly_error("저장 중 문제가 발생했습니다.", _err)
             else:
                 list_saju_from_notion.clear()
                 st.success("Notion에 저장했습니다.")
@@ -2449,7 +2491,11 @@ if body:
         try:
             full_text = st.write_stream(call_gemini_stream(prompt))
         except Exception as e:
-            st.error(f"Gemini 해석 실패: {e}")
+            show_friendly_error(
+                "AI 해석 생성 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요."
+                " 계속 반복되면 문의해주세요.",
+                e,
+            )
         else:
             st.session_state["interpretation"] = full_text
     elif st.session_state.get("interpretation"):
@@ -2459,7 +2505,7 @@ if body:
     if st.session_state.get("last_prompt"):
         with st.expander("🔍 AI에게 전달된 프롬프트 원문 보기 (지니님 자료 반영 확인용)"):
             _p = st.session_state["last_prompt"]
-            _ref_start = _p.find("[지니님 사주첩경 요약")
+            _ref_start = _p.find("[판단 기준 자료")
             if _ref_start == -1:
                 st.warning("⚠️ 이 사주엔 조건에 맞는 지니님 참고자료가 하나도 로딩되지 않았습니다"
                            " (해당 신살·격국·십성이 이 사주에 없거나, references 폴더가 비어있을 수 있음).")
