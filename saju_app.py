@@ -1584,9 +1584,13 @@ def render_wolwoon_strip(year: int):
 
 def render_sinsal_badges(fp: dict):
     """있는 신살만 배지로 표시 (없는 항목은 아예 표시 안 함)."""
-    sinsal = compute_sinsal(fp)
-    ext = compute_sinsal_extended(fp)
-    ext2 = compute_sinsal_extended2(fp)
+    try:
+        sinsal = compute_sinsal(fp)
+        ext = compute_sinsal_extended(fp)
+        ext2 = compute_sinsal_extended2(fp)
+    except Exception as e:
+        st.error(f"신살 계산 실패: {e}")
+        return
     badges = []
     for name in ("역마", "도화", "화개"):
         by_base = sinsal.get(name, {})
@@ -1639,6 +1643,15 @@ def show_sinsal_dialog(fp: dict, body: dict | None = None):
         st.divider()
         st.markdown("**12운성**")
         render_twelve_stages_detail(fp)
+
+        st.divider()
+        st.markdown("**납음오행**")
+        try:
+            nayin = compute_nayin(fp)
+            order = ["연주", "월주", "일주", "시주"]
+            st.text("\n".join(f"  {k}: {nayin[k]}" for k in order if k in nayin))
+        except Exception as e:
+            st.error(f"납음오행 계산 실패: {e}")
 
         st.divider()
         st.markdown("**신살**")
