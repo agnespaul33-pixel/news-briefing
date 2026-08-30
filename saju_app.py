@@ -2071,7 +2071,7 @@ def make_prompt(body: dict, gender_label: str) -> str:
 다음 6개 항목을 순서대로, A4 한 장 분량으로 압축해 작성하십시오. **각 항목 2~3문장으로 제한**하고, 추상적 나열 없이 이 사주 고유의 핵심만 짚으십시오.
 흉(凶)한 내용은 "~한 경향이 있으니 ~하게 대비하면 좋다"처럼 완곡하고 건설적으로 표현하십시오.
 
-▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준)을 2~3문장으로.
+▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준)을 2~3문장으로. 판정 시 위 [형충파해] 결과를 함께 보고, 득지·득세에 쓰인 지지·천간이 충·형·파·해·합에 걸려 있으면 그만큼 감점하여 반영하라. [지니님 사주첩경 요약]에 강약 6단계 퍼센트 기준표가 있으면 그 구간(쇠극/태쇠/쇠/왕/태왕/왕극)에 맞춰 용신 전략을 정하라.
 ▶ 2. 대운(大運) 해석: 현재·다음 대운 위주로 길흉과 그 이유를 2~3문장으로.
 ▶ 3. 신살(神殺): 위 [신살 — 결정적 계산 결과]와 [신살 확장 8종], [신살 확장 2차 9종]을 그대로 인용하라 (재계산·추가 추론 금지). "있음"인 항목만 골라 현대적 의미로 2~3문장으로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 1문장으로 끝내라.
 ▶ 4. 형충파해(刑沖破害): 위 [형충파해 — 결정적 계산 결과]를 그대로 인용하라 (재계산 금지). 충·형·파·해 중 "없음"이 아닌 것만 골라 이 사주에 미치는 실질적 영향을 2~3문장으로. 전부 없으면 "형충파해 없이 원국이 안정적"이라고 1문장으로 끝내라.
@@ -2437,6 +2437,7 @@ if body:
     st.divider()
     if st.button("🧙 만당 스타일 해석 보기", type="primary", width='stretch'):
         prompt = make_prompt(body, gender_label)
+        st.session_state["last_prompt"] = prompt  # 디버그용 — 실제 전달된 프롬프트 확인
         st.subheader("해석")
         try:
             full_text = st.write_stream(call_gemini_stream(prompt))
@@ -2447,6 +2448,17 @@ if body:
     elif st.session_state.get("interpretation"):
         st.subheader("해석")
         st.markdown(st.session_state["interpretation"])
+
+    if st.session_state.get("last_prompt"):
+        with st.expander("🔍 AI에게 전달된 프롬프트 원문 보기 (지니님 자료 반영 확인용)"):
+            _p = st.session_state["last_prompt"]
+            _ref_start = _p.find("[지니님 사주첩경 요약")
+            if _ref_start == -1:
+                st.warning("⚠️ 이 사주엔 조건에 맞는 지니님 참고자료가 하나도 로딩되지 않았습니다"
+                           " (해당 신살·격국·십성이 이 사주에 없거나, references 폴더가 비어있을 수 있음).")
+            else:
+                st.success("✅ 지니님 참고자료가 아래처럼 프롬프트에 포함되어 전달됐습니다.")
+            st.code(_p, language=None)
 
     st.divider()
     st.caption("※ 본 해석은 사주첩경·자평진전 이론을 기반으로 AI가 생성했으며, 참고용입니다.")
