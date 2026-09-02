@@ -2089,7 +2089,13 @@ def make_prompt(body: dict, gender_label: str) -> str:
 5. 흉(凶)한 내용은 "~한 경향이 있으니 ~하게 대비하면 좋다"처럼 완곡하고 건설적으로 표현하십시오.
 6. **내부 자료 출처를 절대 언급하지 마십시오**: "SAZU", "계산 결과", "판단 기준 자료", "~자료에 따르면", "~요약에 의하면" 같은 표현을 해석문에 절대 쓰지 마십시오. 이 라벨들은 참고자료를 구분하기 위한 내부 표시일 뿐, 고객이 보는 최종 해석문에는 마치 처음부터 명리학자 본인이 직접 판단한 것처럼 자연스럽게 서술하십시오. (예: "자료에 따르면 편관격이다" ❌ → "편관격(偏官格)이다" ⭕)
 
-다음 항목을 순서대로 작성하십시오 (항목 제목 외의 수식어·서론 생략, 바로 본문):
+다음 구조로 작성하십시오. 반드시 "## 핵심요약"과 "## 상세해석"이라는 두 마커를 정확히 그대로 사용하십시오(요약·상세 구분을 화면에서 자동으로 나눠 보여주는 데 필요합니다).
+
+## 핵심요약
+이 사주 전체를 관통하는 핵심만 3~5문장으로 압축하십시오. 용신·대운·신살·격국·성격 중 이 사람에게 가장 중요한 포인트만 골라 짧고 명확하게. 전문용어는 최소화하고 일상 언어로.
+
+## 상세해석
+아래 항목을 순서대로, 항목 제목 외의 수식어·서론 생략하고 바로 본문으로 작성하십시오:
 
 ▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준). 판정 시 [형충파해] 결과를 함께 보고, 득지·득세에 쓰인 지지·천간이 충·형·파·해·합에 걸려 있으면 그만큼 감점하여 반영하라. [판단 기준 자료]에 강약 6단계 퍼센트 기준표가 있으면 그 구간(쇠극/태쇠/쇠/왕/태왕/왕극)에 맞춰 용신 전략을 정하라.
 ▶ 2. 대운(大運) 해석: 현재·다음 대운 위주로 길흉과 그 이유.
@@ -2137,6 +2143,35 @@ def call_gemini_stream(prompt: str, max_retries: int = 2):
                 time.sleep(1.5 * attempt)  # 1.5초, 3초로 점점 늘려가며 대기 후 재시도
                 continue
             raise
+
+
+def split_summary_and_detail(text: str) -> tuple[str, str]:
+    """AI 해석 전문에서 '## 핵심요약'과 '## 상세해석' 마커로 두 부분을 분리.
+
+    마커를 못 찾으면(과거 형식이거나 AI가 마커를 안 지켰을 때) 전체를 상세로 보고
+    요약은 빈 문자열로 반환 — 화면에서는 이 경우 자동으로 "전체"만 보여준다.
+    """
+    sum_marker, detail_marker = "## 핵심요약", "## 상세해석"
+    if sum_marker not in text or detail_marker not in text:
+        return "", text
+    summary = text.split(sum_marker, 1)[1].split(detail_marker, 1)[0].strip()
+    detail = text.split(detail_marker, 1)[1].strip()
+    return summary, detail
+
+
+def render_interpretation(full_text: str):
+    summary, detail = split_summary_and_detail(full_text)
+    if not summary:
+        st.markdown(detail or full_text)
+        return
+    view = st.radio("보기 방식", ["📌 요약만", "📖 전체 보기"], horizontal=True, label_visibility="collapsed")
+    if view == "📌 요약만":
+        st.markdown(summary)
+        st.caption("전체 해석이 궁금하시면 위에서 '전체 보기'를 눌러주세요.")
+    else:
+        st.markdown(f"**한눈에 보기**\n\n{summary}")
+        st.divider()
+        st.markdown(detail)
 
 
 # ── UI ────────────────────────────────────────────────────────────────────
@@ -2498,9 +2533,10 @@ if body:
             )
         else:
             st.session_state["interpretation"] = full_text
+            st.rerun()  # 스트리밍 종료 후 요약/전체 토글이 있는 정리된 화면으로 전환
     elif st.session_state.get("interpretation"):
         st.subheader("해석")
-        st.markdown(st.session_state["interpretation"])
+        render_interpretation(st.session_state["interpretation"])
 
     if st.session_state.get("last_prompt"):
         with st.expander("🔍 AI에게 전달된 프롬프트 원문 보기 (지니님 자료 반영 확인용)"):
