@@ -2198,10 +2198,14 @@ TIME_OPTION_LABELS = [t[0] for t in TIME_OPTIONS]
 _DEFAULT_TIME_IDX = TIME_OPTION_LABELS.index("자시(통합, 추천) 23:30~01:30 — 다음날 아침 자시로 계산")
 
 # ── 다중 인물 관리 (세션 상태에 사람별 폼 값 보관, 이름으로 전환) ──────────────────
+_NOTION_PICK_SENTINEL = "— 이름으로 저장된 기록 검색 —"
+
 if "people" not in st.session_state:
     st.session_state["people"] = {"사람1": {}}
 if "active_person" not in st.session_state:
     st.session_state["active_person"] = "사람1"
+if "_person_counter" not in st.session_state:
+    st.session_state["_person_counter"] = 1  # "사람N" 번호 발급용 — 삭제와 무관하게 계속 증가만 함
 
 pcol1, pcol2, pcol3 = st.columns([3, 1, 1])
 with pcol1:
@@ -2210,13 +2214,15 @@ with pcol1:
     st.session_state["active_person"] = active
 with pcol2:
     if st.button("➕ 인원 추가", width='stretch'):
-        n = len(st.session_state["people"]) + 1
-        st.session_state["people"][f"사람{n}"] = {}
-        st.session_state["active_person"] = f"사람{n}"
-        # 이전 인물의 계산 결과가 남아있으면 첫 화면(빈 입력폼)이 아니라 그 결과가
-        # 그대로 보이므로, 새 인물로 전환할 때 함께 지워서 진짜 초기 화면으로 만든다.
+        st.session_state["_person_counter"] += 1
+        new_name = f"사람{st.session_state['_person_counter']}"
+        st.session_state["people"][new_name] = {}
+        st.session_state["active_person"] = new_name
+        # 이전 인물의 계산 결과/검색 선택이 남아있으면 첫 화면(빈 입력폼)이 아니라 그
+        # 상태가 그대로 보이므로, 새 인물로 전환할 때 함께 지워서 진짜 초기 화면으로 만든다.
+        st.session_state["_notion_pick_select"] = _NOTION_PICK_SENTINEL
         for key in ("sazu_body", "gender_label", "interpretation", "last_prompt",
-                    "loaded_fp_from_notion", "loaded_fp_label"):
+                    "loaded_fp_from_notion", "loaded_fp_label", "_notion_pick_error"):
             st.session_state.pop(key, None)
         st.rerun()
 with pcol3:
@@ -2224,8 +2230,6 @@ with pcol3:
         del st.session_state["people"][st.session_state["active_person"]]
         st.session_state["active_person"] = list(st.session_state["people"].keys())[0]
         st.rerun()
-
-_NOTION_PICK_SENTINEL = "— 이름으로 저장된 기록 검색 —"
 _notion_records = list_saju_from_notion()
 if _notion_records:
     _notion_rec_names = [f"{r['이름']} ({r['생년월일']} {r['생시']})" for r in _notion_records]
