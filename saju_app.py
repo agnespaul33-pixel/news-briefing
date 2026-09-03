@@ -1817,8 +1817,12 @@ def list_saju_from_notion():
     if client is None or db_id is None:
         return []
     try:
+        # page_size=100은 Notion API 한 번 호출로 가져올 수 있는 최대치이자 기본값이라
+        # 명시적으로 고정해둠 — 100건을 넘어가면 뒤쪽(오래된) 기록이 목록에서 누락된다는
+        # 뜻이니, 그때는 next_cursor를 따라가는 페이지네이션을 추가해야 함.
         results = client.databases.query(
             database_id=db_id, sorts=[{"property": "저장일", "direction": "descending"}],
+            page_size=100,
         )
         records = []
         for r in results.get("results", []):
