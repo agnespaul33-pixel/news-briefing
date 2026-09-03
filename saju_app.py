@@ -1647,7 +1647,11 @@ def render_hyeongchunghae_summary(fp: dict):
 
 
 
-@st.dialog("🔮 사주 상세보기")
+def _close_sinsal_dialog():
+    st.session_state["_open_sinsal_dialog"] = False
+
+
+@st.dialog("🔮 사주 상세보기", on_dismiss=_close_sinsal_dialog)
 def show_sinsal_dialog(fp: dict, body: dict | None = None):
     try:
         st.markdown("**사주팔자 원국**")
@@ -1863,7 +1867,11 @@ def archive_saju_record(page_id):
         return False
 
 
-@st.dialog("📂 저장된 사주 DB목록")
+def _close_db_list_dialog():
+    st.session_state["_open_db_list_dialog"] = False
+
+
+@st.dialog("📂 저장된 사주 DB목록", on_dismiss=_close_db_list_dialog)
 def show_db_list_dialog():
     try:
         records = list_saju_from_notion()
@@ -1880,6 +1888,7 @@ def show_db_list_dialog():
                     fp = json.loads(r["원국JSON"])
                     st.session_state["loaded_fp_from_notion"] = fp
                     st.session_state["loaded_fp_label"] = f"{r['이름']} ({r['생년월일']} {r['생시']})"
+                    st.session_state["_open_db_list_dialog"] = False  # 불러온 기록 화면을 보여주기 위해 닫음
                     st.rerun()
                 except Exception as e:
                     show_friendly_error("기록을 불러오는 중 문제가 발생했습니다.", e)
@@ -2209,8 +2218,16 @@ if "_person_counter" not in st.session_state:
 
 pcol1, pcol2, pcol3 = st.columns([3, 1, 1])
 with pcol1:
+    # 번호 대신 실제 입력한 이름을 보여줌 — 아직 이름을 안 넣은 빈 슬롯만 "(새 사람)".
+    # (person 딕셔너리를 미리 로컬 변수로 만들어 format_func에 넘김 — 위젯 상태 재계산
+    # 시점에 st.session_state에 직접 접근하면 일부 환경에서 문제가 될 수 있어 피함)
+    _person_labels = {
+        key: (data.get("name") or f"(새 사람 · {key})")
+        for key, data in st.session_state["people"].items()
+    }
     active = st.selectbox("인물 선택", list(st.session_state["people"].keys()),
-                           index=list(st.session_state["people"].keys()).index(st.session_state["active_person"]))
+                           index=list(st.session_state["people"].keys()).index(st.session_state["active_person"]),
+                           format_func=lambda k: _person_labels.get(k, k))
     st.session_state["active_person"] = active
 with pcol2:
     if st.button("➕ 인원 추가", width='stretch'):
@@ -2221,6 +2238,8 @@ with pcol2:
         # 이전 인물의 계산 결과/검색 선택이 남아있으면 첫 화면(빈 입력폼)이 아니라 그
         # 상태가 그대로 보이므로, 새 인물로 전환할 때 함께 지워서 진짜 초기 화면으로 만든다.
         st.session_state["_notion_pick_select"] = _NOTION_PICK_SENTINEL
+        st.session_state["_open_sinsal_dialog"] = False
+        st.session_state["_open_db_list_dialog"] = False
         for key in ("sazu_body", "gender_label", "interpretation", "last_prompt",
                     "loaded_fp_from_notion", "loaded_fp_label", "_notion_pick_error"):
             st.session_state.pop(key, None)
@@ -2442,6 +2461,7 @@ if body:
         st.markdown("&nbsp;", unsafe_allow_html=True)
         if st.button("🔮 상세보기", width='stretch'):
             st.session_state["_open_sinsal_dialog"] = True
+            st.session_state["_open_db_list_dialog"] = False  # 다이얼로그는 한 번에 하나만 열 수 있음
     with hcol3:
         st.markdown("&nbsp;", unsafe_allow_html=True)
         if st.button("💾 저장", width='stretch'):
@@ -2462,6 +2482,7 @@ if body:
         st.markdown("&nbsp;", unsafe_allow_html=True)
         if st.button("📂 DB목록", width='stretch'):
             st.session_state["_open_db_list_dialog"] = True
+            st.session_state["_open_sinsal_dialog"] = False  # 다이얼로그는 한 번에 하나만 열 수 있음
 
     # 주의: 다이얼로그 안의 위젯(버튼·셀렉트박스)을 누르면 그 자체로 리런이 발생한다.
     # 그 리런 시점에 아래 플래그가 이미 False면 다이얼로그 함수가 다시 호출되지 않아
