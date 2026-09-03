@@ -2213,6 +2213,11 @@ with pcol2:
         n = len(st.session_state["people"]) + 1
         st.session_state["people"][f"사람{n}"] = {}
         st.session_state["active_person"] = f"사람{n}"
+        # 이전 인물의 계산 결과가 남아있으면 첫 화면(빈 입력폼)이 아니라 그 결과가
+        # 그대로 보이므로, 새 인물로 전환할 때 함께 지워서 진짜 초기 화면으로 만든다.
+        for key in ("sazu_body", "gender_label", "interpretation", "last_prompt",
+                    "loaded_fp_from_notion", "loaded_fp_label"):
+            st.session_state.pop(key, None)
         st.rerun()
 with pcol3:
     if len(st.session_state["people"]) > 1 and st.button("🗑️ 이 인물 삭제", width='stretch'):
