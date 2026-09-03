@@ -2460,12 +2460,15 @@ if body:
         if st.button("📂 DB목록", width='stretch'):
             st.session_state["_open_db_list_dialog"] = True
 
+    # 주의: 다이얼로그 안의 위젯(버튼·셀렉트박스)을 누르면 그 자체로 리런이 발생한다.
+    # 그 리런 시점에 아래 플래그가 이미 False면 다이얼로그 함수가 다시 호출되지 않아
+    # Streamlit이 다이얼로그를 그대로 닫아버리고, 안에 있던 버튼 클릭은 실행조차
+    # 안 된 채 조용히 사라진다("삭제가 안 된다" 버그의 원인). 그래서 열려있는 동안은
+    # 매 리런마다 계속 호출해야 하며, 여기서 곧바로 False로 되돌리면 안 된다.
     if st.session_state.get("_open_sinsal_dialog"):
         show_sinsal_dialog(fp, body)
-        st.session_state["_open_sinsal_dialog"] = False
     if st.session_state.get("_open_db_list_dialog"):
         show_db_list_dialog()
-        st.session_state["_open_db_list_dialog"] = False
 
     render_saju_dashboard_table(fp)
 
