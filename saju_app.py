@@ -1866,35 +1866,25 @@ def show_db_list_dialog():
         if not records:
             st.caption("저장된 기록이 없습니다 (또는 Notion 연결 미설정).")
             return
-        table_rows = [
-            {"이름": r["이름"], "DB번호": r["DB번호"], "성별": r["성별"], "사주팔자": r["사주팔자"],
-             "생년월일": r["생년월일"], "생시": r["생시"], "저장일": r["저장일"]}
-            for r in records
-        ]
-        names = [f"{r['이름']} ({r['생년월일']} {r['생시']})" for r in records]
 
-        st.caption("행을 클릭하면 바로 불러옵니다.")
-        event = st.dataframe(
-            pd.DataFrame(table_rows), width='stretch', hide_index=True,
-            on_select="rerun", selection_mode="single-row",
-        )
-        if event.selection.rows:
-            picked = event.selection.rows[0]
-            try:
-                fp = json.loads(records[picked]["원국JSON"])
-                st.session_state["loaded_fp_from_notion"] = fp
-                st.session_state["loaded_fp_label"] = names[picked]
-                st.rerun()
-            except Exception as e:
-                show_friendly_error("기록을 불러오는 중 문제가 발생했습니다.", e)
-
-        st.divider()
-        picked_del = st.selectbox("삭제할 기록 선택", range(len(records)), format_func=lambda i: names[i])
-        if st.button("🗑️ 이 기록 삭제", width='stretch'):
-            if archive_saju_record(records[picked_del]["id"]):
-                list_saju_from_notion.clear()
-                st.success("삭제했습니다.")
-                st.rerun()
+        for r in records:
+            label = f"**{r['이름']}** — {r['생년월일']} {r['생시']} ({r['성별']}) · {r['사주팔자']}"
+            c1, c2, c3 = st.columns([5, 1.3, 1.3])
+            c1.markdown(label)
+            if c2.button("📖 불러오기", key=f"_load_{r['id']}", width='stretch'):
+                try:
+                    fp = json.loads(r["원국JSON"])
+                    st.session_state["loaded_fp_from_notion"] = fp
+                    st.session_state["loaded_fp_label"] = f"{r['이름']} ({r['생년월일']} {r['생시']})"
+                    st.rerun()
+                except Exception as e:
+                    show_friendly_error("기록을 불러오는 중 문제가 발생했습니다.", e)
+            if c3.button("🗑️ 삭제", key=f"_del_{r['id']}", width='stretch'):
+                if archive_saju_record(r["id"]):
+                    list_saju_from_notion.clear()
+                    st.success(f"{r['이름']} 기록을 삭제했습니다.")
+                    st.rerun()
+            st.divider()
     except Exception as e:
         show_friendly_error("목록을 불러오는 중 문제가 발생했습니다.", e)
 
