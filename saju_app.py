@@ -2206,49 +2206,12 @@ TIME_OPTIONS = [
 TIME_OPTION_LABELS = [t[0] for t in TIME_OPTIONS]
 _DEFAULT_TIME_IDX = TIME_OPTION_LABELS.index("자시(통합, 추천) 23:30~01:30 — 다음날 아침 자시로 계산")
 
-# ── 다중 인물 관리 (세션 상태에 사람별 폼 값 보관, 이름으로 전환) ──────────────────
+# ── 입력 폼 값 보관 (세션 재실행 간 마지막 입력값 유지) + 이름으로 저장된 기록 검색 ──
 _NOTION_PICK_SENTINEL = "— 이름으로 저장된 기록 검색 —"
 
-if "people" not in st.session_state:
-    st.session_state["people"] = {"사람1": {}}
-if "active_person" not in st.session_state:
-    st.session_state["active_person"] = "사람1"
-if "_person_counter" not in st.session_state:
-    st.session_state["_person_counter"] = 1  # "사람N" 번호 발급용 — 삭제와 무관하게 계속 증가만 함
+if "current_input" not in st.session_state:
+    st.session_state["current_input"] = {}
 
-pcol1, pcol2, pcol3 = st.columns([3, 1, 1])
-with pcol1:
-    # 번호 대신 실제 입력한 이름을 보여줌 — 아직 이름을 안 넣은 빈 슬롯만 "(새 사람)".
-    # (person 딕셔너리를 미리 로컬 변수로 만들어 format_func에 넘김 — 위젯 상태 재계산
-    # 시점에 st.session_state에 직접 접근하면 일부 환경에서 문제가 될 수 있어 피함)
-    _person_labels = {
-        key: (data.get("name") or f"(새 사람 · {key})")
-        for key, data in st.session_state["people"].items()
-    }
-    active = st.selectbox("인물 선택", list(st.session_state["people"].keys()),
-                           index=list(st.session_state["people"].keys()).index(st.session_state["active_person"]),
-                           format_func=lambda k: _person_labels.get(k, k))
-    st.session_state["active_person"] = active
-with pcol2:
-    if st.button("➕ 인원 추가", width='stretch'):
-        st.session_state["_person_counter"] += 1
-        new_name = f"사람{st.session_state['_person_counter']}"
-        st.session_state["people"][new_name] = {}
-        st.session_state["active_person"] = new_name
-        # 이전 인물의 계산 결과/검색 선택이 남아있으면 첫 화면(빈 입력폼)이 아니라 그
-        # 상태가 그대로 보이므로, 새 인물로 전환할 때 함께 지워서 진짜 초기 화면으로 만든다.
-        st.session_state["_notion_pick_select"] = _NOTION_PICK_SENTINEL
-        st.session_state["_open_sinsal_dialog"] = False
-        st.session_state["_open_db_list_dialog"] = False
-        for key in ("sazu_body", "gender_label", "interpretation", "last_prompt",
-                    "loaded_fp_from_notion", "loaded_fp_label", "_notion_pick_error"):
-            st.session_state.pop(key, None)
-        st.rerun()
-with pcol3:
-    if len(st.session_state["people"]) > 1 and st.button("🗑️ 이 인물 삭제", width='stretch'):
-        del st.session_state["people"][st.session_state["active_person"]]
-        st.session_state["active_person"] = list(st.session_state["people"].keys())[0]
-        st.rerun()
 _notion_records = list_saju_from_notion()
 if _notion_records:
     _notion_rec_names = [f"{r['이름']} ({r['생년월일']} {r['생시']})" for r in _notion_records]
@@ -2298,7 +2261,7 @@ if _notion_records:
         st.session_state.pop("interpretation", None)
         st.session_state.pop("loaded_fp_from_notion", None)
         st.session_state.pop("loaded_fp_label", None)
-        st.session_state["people"][st.session_state["active_person"]] = {
+        st.session_state["current_input"] = {
             "name": rec.get("이름", ""),
             "calendar_type": calendar_type, "year": birth_y, "month": birth_m, "day": birth_d,
             "gender_label": gender_label, "time_known": time_known, "time_idx": time_idx,
@@ -2314,7 +2277,7 @@ if _notion_records:
     if st.session_state.get("_notion_pick_error"):
         show_friendly_error("기록을 불러오는 중 문제가 발생했습니다.", st.session_state.pop('_notion_pick_error'))
 
-saved = st.session_state["people"].get(st.session_state["active_person"], {})
+saved = st.session_state["current_input"]
 
 with st.form("saju_form"):
     name = st.text_input("이름", value=saved.get("name", ""))
@@ -2349,8 +2312,8 @@ with st.form("saju_form"):
     submitted = st.form_submit_button("사주 계산하기", type="primary", width='stretch')
 
 if submitted:
-    # 이 인물의 입력값을 세션에 저장해 다음에 이 인물로 돌아와도 유지되게 함
-    st.session_state["people"][st.session_state["active_person"]] = {
+    # 입력값을 세션에 저장해 다음 리런에도 폼에 그대로 남아있게 함
+    st.session_state["current_input"] = {
         "name": name, "calendar_type": calendar_type,
         "year": int(year), "month": int(month), "day": int(day),
         "gender_label": gender_label, "time_known": time_known, "time_idx": time_idx,
@@ -2468,7 +2431,7 @@ if body:
             _cal_type = "음력윤달" if (inp.get("isLunar") and inp.get("isLeapMonth")) else ("음력" if inp.get("isLunar") else "양력")
             _birth_str = f"{inp['birthYear']}-{inp['birthMonth']:02d}-{inp['birthDay']:02d}"
             _time_str = _time_note
-            _person = st.session_state["people"].get(st.session_state["active_person"], {})
+            _person = st.session_state["current_input"]
             _pid, _err = save_saju_to_notion(
                 _person.get("name", ""),
                 "여" if inp["isFemale"] else "남", _cal_type, _birth_str, _time_str, fp,
