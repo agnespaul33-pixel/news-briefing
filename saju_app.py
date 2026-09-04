@@ -2211,6 +2211,8 @@ _NOTION_PICK_SENTINEL = "— 이름으로 저장된 기록 검색 —"
 
 if "current_input" not in st.session_state:
     st.session_state["current_input"] = {}
+if "_form_version" not in st.session_state:
+    st.session_state["_form_version"] = 0  # 폼 위젯 key에 붙여서, 값이 바뀌면 완전히 새 위젯으로 취급되게 함
 
 _notion_records = list_saju_from_notion()
 if _notion_records:
@@ -2266,6 +2268,7 @@ if _notion_records:
             "calendar_type": calendar_type, "year": birth_y, "month": birth_m, "day": birth_d,
             "gender_label": gender_label, "time_known": time_known, "time_idx": time_idx,
         }
+        st.session_state["_form_version"] += 1  # 폼 위젯이 새 값을 반영하도록 새 키로 교체
 
     st.selectbox(
         "🔍 저장된 사람 검색 (이름 입력하면 자동완성)",
@@ -2277,30 +2280,49 @@ if _notion_records:
     if st.session_state.get("_notion_pick_error"):
         show_friendly_error("기록을 불러오는 중 문제가 발생했습니다.", st.session_state.pop('_notion_pick_error'))
 
+def _reset_for_new_person():
+    st.session_state["current_input"] = {}
+    st.session_state["_notion_pick_select"] = _NOTION_PICK_SENTINEL
+    st.session_state["_open_sinsal_dialog"] = False
+    st.session_state["_open_db_list_dialog"] = False
+    # 폼 위젯들은 한 번 렌더링되면 value=로 다시 초기화가 안 되므로(Streamlit 기본 동작),
+    # 키에 버전 번호를 붙여 완전히 새 위젯으로 취급되게 해서 확실히 빈 값으로 리셋한다.
+    st.session_state["_form_version"] += 1
+    for key in ("sazu_body", "gender_label", "interpretation", "last_prompt",
+                "loaded_fp_from_notion", "loaded_fp_label", "_notion_pick_error"):
+        st.session_state.pop(key, None)
+
+
+st.button("🆕 새로 입력", on_click=_reset_for_new_person,
+          help="폼과 이전 계산 결과를 모두 비우고 새 사람 입력을 시작합니다.")
+
 saved = st.session_state["current_input"]
 
+_fv = st.session_state["_form_version"]
 with st.form("saju_form"):
-    name = st.text_input("이름", value=saved.get("name", ""))
+    name = st.text_input("이름", value=saved.get("name", ""), key=f"name_{_fv}")
 
     c1, c2, c3 = st.columns([1.3, 2, 1])
     with c1:
         calendar_type = st.radio("달력", ["양력", "음력", "음력윤달"], horizontal=False,
-                                  index=["양력", "음력", "음력윤달"].index(saved.get("calendar_type", "양력")))
+                                  index=["양력", "음력", "음력윤달"].index(saved.get("calendar_type", "양력")),
+                                  key=f"calendar_type_{_fv}")
     with c2:
         cc1, cc2, cc3 = st.columns(3)
-        year = cc1.number_input("연도", min_value=1900, max_value=2035, value=saved.get("year", 1995), step=1)
-        month = cc2.selectbox("월", list(range(1, 13)), index=(saved.get("month", 1) - 1))
-        day = cc3.selectbox("일", list(range(1, 32)), index=(saved.get("day", 1) - 1))
+        year = cc1.number_input("연도", min_value=1900, max_value=2035, value=saved.get("year", 1995), step=1,
+                                 key=f"year_{_fv}")
+        month = cc2.selectbox("월", list(range(1, 13)), index=(saved.get("month", 1) - 1), key=f"month_{_fv}")
+        day = cc3.selectbox("일", list(range(1, 32)), index=(saved.get("day", 1) - 1), key=f"day_{_fv}")
     with c3:
         gender_label = st.radio("성별", ["남", "여"], horizontal=True,
-                                 index=["남", "여"].index(saved.get("gender_label", "남")))
+                                 index=["남", "여"].index(saved.get("gender_label", "남")), key=f"gender_{_fv}")
 
-    time_known = st.checkbox("태어난 시간을 압니다", value=saved.get("time_known", True))
+    time_known = st.checkbox("태어난 시간을 압니다", value=saved.get("time_known", True), key=f"time_known_{_fv}")
     time_idx = day_offset = None
     if time_known:
         time_idx = st.selectbox("시(時) 입력", range(len(TIME_OPTIONS)),
                                  format_func=lambda i: TIME_OPTIONS[i][0],
-                                 index=saved.get("time_idx", _DEFAULT_TIME_IDX))
+                                 index=saved.get("time_idx", _DEFAULT_TIME_IDX), key=f"time_idx_{_fv}")
         st.caption("조자시: 출생 당일 아침 자시 / 야자시: 출생 당일 저녁 자시 / "
                    "자시(통합): 출생 다음날 아침 자시로 계산됩니다.")
     else:
