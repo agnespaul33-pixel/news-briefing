@@ -2204,7 +2204,12 @@ def call_gemini_stream(prompt: str, max_retries: int = 2):
     config = genai_types.GenerateContentConfig(
         temperature=0.8,
         max_output_tokens=8192,
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+        # 주의: thinking_budget=0은 gemini-2.5-flash에서는 되지만 gemini-3.x 계열
+        # (예: gemini-3.6-flash)에서는 400 INVALID_ARGUMENT로 거부된다. 1은 두 계열
+        # 모두에서 동작 확인됨(2.5-flash: thoughts_token_count 여전히 None으로 사실상
+        # 사고 비활성. 3.6-flash: 0 대신 받아주는 최소값) — 모델을 또 바꿀 때도 먼저
+        # 이 값으로 재확인할 것.
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=1),
     )
 
     attempt = 0
