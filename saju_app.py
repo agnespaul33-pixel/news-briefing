@@ -1210,6 +1210,60 @@ def _accumulate_ganji_interaction(result: dict, label: str, s: str | None, b: st
             result["형"].append(f"{label}지({b}) 자형({b}{b})")
 
 
+def compute_sewoon_analysis(fp: dict, year: int) -> dict:
+    """세운(歲運)의 십성 및 원국과의 합충형파해 관계 분석.
+
+    반환: {"간지": "丙午", "천간십성": "정인", "지지십성": "편인",
+           "관계분석": {"천간합":[...], "육합":[...], "충":[...], "형":[...], "파":[...], "해":[...]}}
+    """
+    day_p = fp.get("day")
+    if day_p is None:
+        return {}
+    day_stem = _extract_char(day_p.get("skyFull"), STEM_CHARS)
+    if day_stem is None:
+        return {}
+
+    ganji = compute_year_ganji(year)
+    sw_stem, sw_branch = ganji[0], ganji[1]
+
+    stem_sipseong = sipseong_of(day_stem, STEM_ELEMENT.get(sw_stem), STEM_YINYANG.get(sw_stem)) or "?"
+    jg_stem = BRANCH_JEONGGI_STEM.get(sw_branch)
+    elem = STEM_ELEMENT.get(jg_stem) if jg_stem else BRANCH_ELEMENT.get(sw_branch)
+    yy = STEM_YINYANG.get(jg_stem) if jg_stem else BRANCH_YINYANG.get(sw_branch)
+    branch_sipseong = sipseong_of(day_stem, elem, yy) or "?"
+
+    pillar_kr_bare = {"year": "연", "month": "월", "day": "일", "hour": "시"}
+    interactions = {name: [] for name in ("천간합", "육합", "충", "형", "파", "해")}
+    for key in ("year", "month", "day", "hour"):
+        p = fp.get(key)
+        if p is None:
+            continue
+        s = _extract_char(p.get("skyFull"), STEM_CHARS)
+        b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
+        _accumulate_ganji_interaction(interactions, pillar_kr_bare[key], s, b, sw_stem, sw_branch)
+
+    return {
+        "간지": ganji, "천간십성": stem_sipseong, "지지십성": branch_sipseong,
+        "관계분석": interactions,
+    }
+
+
+def format_sewoon_analysis(sw: dict, year: int) -> str:
+    if not sw:
+        return "  계산 불가"
+    lines = [f"  {year}년 세운: {sw['간지']} (천간십성={sw['천간십성']}, 지지십성={sw['지지십성']})"]
+    inter = sw["관계분석"]
+    any_hit = False
+    for name in ("천간합", "육합", "충", "형", "파", "해"):
+        items = inter.get(name, [])
+        if items:
+            any_hit = True
+            lines.append(f"  원국과의 {name}: " + "; ".join(items))
+    if not any_hit:
+        lines.append("  원국과 특별한 합충형파해 없음")
+    return "\n".join(lines)
+
+
 def format_wolwoon(wo_stem: str, wo_branch: str) -> str:
     return f"  월운 간지: {wo_stem}{wo_branch}"
 
@@ -1409,6 +1463,10 @@ def collect_references(fp: dict, sinsal: dict, sipseong: dict, sin_strength_scor
     ilji_desc = ILJI_SEONGGYEOK.get(ilji_sipseong)
     if ilji_desc:
         blocks.append(f"### [일지 성격] {ilji_sipseong}\n{ilji_desc}")
+
+    jikeop = _load_ref("직업", "직업유형.md")
+    if jikeop:
+        blocks.append(f"### [직업유형 참고표]\n{jikeop}")
 
     return "\n\n".join(blocks)
 
@@ -2052,6 +2110,11 @@ def format_sazu_context(body: dict) -> str:
     hch_result = compute_hyeongchunghae(fp)
     lines.append(format_hyeongchunghae(hch_result))
 
+    lines.append("\n[세운(歲運) — 올해 운세, 원국과의 관계 포함, 결정적 계산 결과]")
+    this_year = sewoon_year_for_date(datetime.now())
+    sw = compute_sewoon_analysis(fp, this_year)
+    lines.append(format_sewoon_analysis(sw, this_year))
+
     refs = collect_references(fp, sinsal_result, sipseong, ss.get("score"), "여" if inp["isFemale"] else "남")
     if refs:
         lines.append("\n[판단 기준 자료 — 이 사주에 해당하는 부분만 적용]")
@@ -2074,9 +2137,10 @@ def format_sazu_context(body: dict) -> str:
 def make_prompt(body: dict, gender_label: str) -> str:
     context = format_sazu_context(body)
     spouse_star = "재성(財星)" if gender_label == "남" else "관성(官星)"
+    child_star = "관성(官星)" if gender_label == "남" else "식상(食傷)"
 
     return f"""당신은 사주첩경(四柱捷徑)의 저자 이석영 선생과 자평진전(子平眞詮)에 정통한 명리학자입니다.
-아래 【 SAZU 계산 결과 】를 근거로 삼아, 재계산 없이 그대로 인용하며 해석만 하십시오. 특히 십성·12운성·납음·지장간·신살·형충파해는 실제 만세력 앱과 대조해 검증한 자체 계산 결과이니 반드시 그대로 신뢰하고, 절대 스스로 재계산하거나 다른 값으로 바꾸지 마십시오.
+아래 【 SAZU 계산 결과 】를 근거로 삼아, 재계산 없이 그대로 인용하며 해석만 하십시오. 특히 십성·12운성·납음·지장간·신살·형충파해·세운은 실제 만세력 앱과 대조해 검증한 자체 계산 결과이니 반드시 그대로 신뢰하고, 절대 스스로 재계산하거나 다른 값으로 바꾸지 마십시오.
 【 판단 기준 자료 】가 컨텍스트에 포함되어 있으면, 그 판단 기준을 일반 명리 지식보다 최우선으로 따르십시오. 실제 원문을 인용하는 것처럼 문장을 지어내지 말고, 판단 기준으로만 활용해 당신의 말로 풀이하십시오.
 
 ═══════════════════════════════════════
@@ -2085,31 +2149,45 @@ def make_prompt(body: dict, gender_label: str) -> str:
 ═══════════════════════════════════════
 
 【 서술 원칙 — 반드시 지킬 것 】
-1. **근거 기반**: 모든 문장은 위 【 SAZU 계산 결과 】 또는 【 판단 기준 자료 】에 실제로 나온 값(신살명·격국명·십성명·형충관계·오행 등)을 최소 하나 이상 직접 언급하며 전개하십시오. 근거를 못 대는 일반론·추상적 미사여구는 쓰지 마십시오.
-2. **고전과 현대의 자연스러운 통합**: 신살명·격국명 같은 고전 용어를 언급할 땐, 용어만 던지고 끝내지 말고 **바로 이어지는 문장에서** "이는 현대적으로 ~한 경향/상황을 뜻한다"처럼 즉시 풀어써서, 용어와 해설이 하나의 흐름으로 읽히게 하십시오. 용어 나열 문단과 해설 문단을 따로 떼어놓지 마십시오.
-3. **길이는 근거량을 따름**: 항목별 문장수를 인위적으로 맞추지 마십시오. 그 항목에 해당하는 근거(신살·형충파해 등)가 많으면 그만큼 충분히 풀어 쓰고, 근거가 적거나 없으면 짧게 끝내십시오. 있지도 않은 근거를 늘리려고 사족을 붙이지 마십시오.
-4. **여러 자료가 동시에 로딩됐을 때는 나열하지 말고 종합**: 예를 들어 살인상생·탐재괴인·특정 십성 성격이 동시에 해당하면, 이를 "1)~ 2)~ 3)~"처럼 각각 따로 설명하지 말고, 이 사람의 삶의 결(성격·직업·관계 경향)로 자연스럽게 엮어서 하나의 인물상으로 그려내십시오.
+1. **근거 기반**: 모든 문장은 위 데이터에 실제로 나온 값(신살명·격국명·십성명·형충관계·오행 등)을 최소 하나 이상 직접 언급하며 전개하십시오. 근거를 못 대는 일반론은 쓰지 마십시오.
+2. **짧고 압축적으로**: 사주첩경 원문처럼, 여러 개념을 압축한 전문 용어(예: "토금상관격의 수기", "상관패인")를 적극 활용하고, 풀어쓰는 문장은 최소화하십시오. 각 항목은 원칙적으로 2~4문장을 넘기지 마십시오 — 근거가 많아도 그중 **가장 특징적인 것 1~2개만** 골라 압축해서 쓰고, 나머지는 과감히 생략하십시오.
+3. **절대 반복 금지**: 같은 사실(예: 특정 신살·십성 강함)을 이미 한 항목에서 언급했으면, 다른 항목에서 또 언급하지 마십시오. 각 항목은 서로 다른 새로운 근거만 다루십시오.
+4. **고전과 현대의 통합**: 고전 용어를 언급할 땐 바로 이어서 짧게 현대적 의미를 붙이되, 별도 문단으로 늘리지 마십시오.
 5. 흉(凶)한 내용은 "~한 경향이 있으니 ~하게 대비하면 좋다"처럼 완곡하고 건설적으로 표현하십시오.
-6. **내부 자료 출처를 절대 언급하지 마십시오**: "SAZU", "계산 결과", "판단 기준 자료", "~자료에 따르면", "~요약에 의하면" 같은 표현을 해석문에 절대 쓰지 마십시오. 이 라벨들은 참고자료를 구분하기 위한 내부 표시일 뿐, 고객이 보는 최종 해석문에는 마치 처음부터 명리학자 본인이 직접 판단한 것처럼 자연스럽게 서술하십시오. (예: "자료에 따르면 편관격이다" ❌ → "편관격(偏官格)이다" ⭕)
+6. **내부 자료 출처를 절대 언급하지 마십시오**: "SAZU", "계산 결과", "판단 기준 자료", "~자료에 따르면" 같은 표현을 쓰지 말고, 명리학자 본인이 직접 판단한 것처럼 서술하십시오.
+7. 근거가 부족하거나 해당 사항이 없는 항목은 "특이사항 없음" 등으로 짧게 끝내십시오. 억지로 채우지 마십시오.
 
-다음 구조로 작성하십시오. 반드시 "## 핵심요약"과 "## 상세해석"이라는 두 마커를 정확히 그대로 사용하십시오(요약·상세 구분을 화면에서 자동으로 나눠 보여주는 데 필요합니다).
+다음 구조로, 아래 마커를 정확히 그대로 사용해 작성하십시오 (화면에서 자동으로 요약/펼치기 항목으로 나눠 보여주는 데 필요합니다):
 
 ## 핵심요약
-이 사주 전체를 관통하는 핵심만 3~5문장으로 압축하십시오. 용신·대운·신살·격국·성격 중 이 사람에게 가장 중요한 포인트만 골라 짧고 명확하게. 전문용어는 최소화하고 일상 언어로.
+이 사주에서 가장 특징적인 것 2~4가지만 골라 3~5문장으로 압축하십시오(사주첩경 시결 인용 스타일처럼 짧고 강하게). 격국명·용신·현재 대운·눈에 띄는 신살 중 임팩트 있는 것 위주로.
 
-## 상세해석
-아래 항목을 순서대로, 항목 제목 외의 수식어·서론 생략하고 바로 본문으로 작성하십시오:
+## 격국
+정격(正格) 기본, 격국명과 그 성립 근거를 짧게. 용신(用神)도 이 항목에서 함께 판단(억부·조후 기준, [판단 기준 자료]의 강약 6단계 표 활용). [격국 특수원리](부성입묘·살인상생 등)가 로딩되어 있으면 반영. 신강신약 극단일 때만 종격 검토.
 
-▶ 1. 일간 강약과 용신(用神): 신강/신약/중화 판정 + 용신 오행(억부·조후 기준). 판정 시 [형충파해] 결과를 함께 보고, 득지·득세에 쓰인 지지·천간이 충·형·파·해·합에 걸려 있으면 그만큼 감점하여 반영하라. [판단 기준 자료]에 강약 6단계 퍼센트 기준표가 있으면 그 구간(쇠극/태쇠/쇠/왕/태왕/왕극)에 맞춰 용신 전략을 정하라.
-▶ 2. 대운(大運) 해석: 현재·다음 대운 위주로 길흉과 그 이유.
-▶ 3. 신살(神殺): 위 [신살] 계열 결과를 그대로 인용하라(재계산 금지). "있음"인 항목만 골라 현대적 의미로 풀이. 전부 "없음"이면 "뚜렷한 신살 없음"이라고 짧게 끝내라.
-▶ 4. 형충파해(刑沖破害): 위 [형충파해] 결과를 그대로 인용하라(재계산 금지). "없음"이 아닌 것만 골라 이 사주에 미치는 실질적 영향을 서술. 전부 없으면 "형충파해 없이 원국이 안정적"이라고 짧게 끝내라.
-▶ 5. 격국(格局): 기본은 정격(正格)이다. 신강신약이 극단적이고 오행이 한쪽으로 쏠렸을 때만 종격(從格)을 검토하고, [격국 특수원리] 자료(부성입묘·살인상생·관살혼잡 등)가 로딩되어 있으면 반드시 반영하라. 해당 없으면 "정격, 1번의 용신을 따름"이라고 짧게 끝내라.
-▶ 6. 성격·기질과 육친: [십성 성격해석]·[일지 성격]·[육친] 자료가 로딩되어 있으면 반드시 활용해 이 사람의 성격·적성·주변 관계 경향을 서술하라. 로딩된 자료가 없으면 십성 분포만으로 짧게 성격 특징을 짚어라.
-▶ 종합 총평: 위 1~6번을 관통하는 핵심 테마와 조언. {gender_label}성 배우자성({spouse_star}) 관련 내용 포함.
+## 대운
+현재·다음 대운의 간지·십성과 그 의미를 짧게. 대운이 원국과 이루는 형충합 관계가 있으면 반드시 언급(예: 관성이 재능과 합하여 새 기회, 충으로 인한 변화 등).
+
+## 세운
+올해 세운의 간지·십성과 원국과의 관계를 짧게. 조후 관점(한난조습 균형)도 고려. 특별한 기회나 주의점이 있으면 짧게.
+
+## 신살및 형충파해
+[신살], [신살 확장], [형충파해] 중 실제로 "있음"인 것만 골라 가장 특징적인 것 위주로 짧게. 전부 없으면 "특이사항 없음".
+
+## {child_star.split('(')[0]}과 자녀운
+[육친] 자료를 활용해 자녀 관련(자녀복·자녀와의 관계)을 짧게. 원국에 {child_star} 관련 정보가 부족하면 "특이사항 없음".
+
+## 재물운
+재성(정재·편재)의 유무·강약과 대운·세운의 재물 흐름을 짧게.
+
+## 직업·적성
+[직업유형 참고표]에서 이 사주의 십성 조합과 가장 가깝게 일치하는 직업 1~3개만 골라 짧게 제시. 참고표에 정확히 맞는 게 없으면 십성 특성 기반으로 일반적 적성만.
+
+## 대인관계
+비겁·도화 등 대인관계 관련 신살·십성을 짧게. {gender_label}성 배우자성({spouse_star})도 이 항목에서 함께.
 
 ※ 한국어, 전문 용어는 한자 병기.
-※ 사주첩경·자평진전 등 원문에 실제로 없는 문장을 지어내 따옴표로 인용하지 마십시오. 원리를 설명할 때는 "~라는 원칙에 따라"처럼 서술하고, 직접 인용 형식은 쓰지 마십시오."""
+※ 사주첩경·자평진전 등 원문에 실제로 없는 문장을 지어내 따옴표로 인용하지 마십시오."""
 
 
 def call_gemini_stream(prompt: str, max_retries: int = 2):
@@ -2122,7 +2200,7 @@ def call_gemini_stream(prompt: str, max_retries: int = 2):
     client = genai.Client(api_key=GEMINI_API_KEY)
     config = genai_types.GenerateContentConfig(
         temperature=0.8,
-        max_output_tokens=4096,
+        max_output_tokens=8192,
         thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
     )
 
@@ -2148,33 +2226,38 @@ def call_gemini_stream(prompt: str, max_retries: int = 2):
             raise
 
 
-def split_summary_and_detail(text: str) -> tuple[str, str]:
-    """AI 해석 전문에서 '## 핵심요약'과 '## 상세해석' 마커로 두 부분을 분리.
+def split_sections(text: str) -> list[tuple[str, str]]:
+    """AI 해석 전문을 '## 제목' 마커 기준으로 (제목, 본문) 목록으로 분리.
 
-    마커를 못 찾으면(과거 형식이거나 AI가 마커를 안 지켰을 때) 전체를 상세로 보고
-    요약은 빈 문자열로 반환 — 화면에서는 이 경우 자동으로 "전체"만 보여준다.
+    마커가 하나도 없으면(과거 형식이거나 AI가 마커를 안 지켰을 때) 전체를
+    ("", 전체텍스트) 하나짜리 목록으로 반환 — 화면에서는 이 경우 그냥 전체를 보여준다.
     """
-    sum_marker, detail_marker = "## 핵심요약", "## 상세해석"
-    if sum_marker not in text or detail_marker not in text:
-        return "", text
-    summary = text.split(sum_marker, 1)[1].split(detail_marker, 1)[0].strip()
-    detail = text.split(detail_marker, 1)[1].strip()
-    return summary, detail
+    if "## " not in text:
+        return [("", text)]
+    parts = text.split("## ")
+    sections = []
+    for part in parts:
+        if not part.strip():
+            continue
+        lines = part.split("\n", 1)
+        title = lines[0].strip()
+        body = lines[1].strip() if len(lines) > 1 else ""
+        sections.append((title, body))
+    return sections
 
 
 def render_interpretation(full_text: str):
-    summary, detail = split_summary_and_detail(full_text)
-    if not summary:
-        st.markdown(detail or full_text)
+    sections = split_sections(full_text)
+    if len(sections) == 1 and sections[0][0] == "":
+        st.markdown(sections[0][1])  # 마커 없는 과거 형식 — 폴백으로 전체 그대로
         return
-    view = st.radio("보기 방식", ["📌 요약만", "📖 전체 보기"], horizontal=True, label_visibility="collapsed")
-    if view == "📌 요약만":
-        st.markdown(summary)
-        st.caption("전체 해석이 궁금하시면 위에서 '전체 보기'를 눌러주세요.")
-    else:
-        st.markdown(f"**한눈에 보기**\n\n{summary}")
-        st.divider()
-        st.markdown(detail)
+
+    for title, body in sections:
+        if title == "핵심요약":
+            st.markdown(body)
+        elif body:
+            with st.expander(f"📖 {title}"):
+                st.markdown(body)
 
 
 # ── UI ────────────────────────────────────────────────────────────────────
