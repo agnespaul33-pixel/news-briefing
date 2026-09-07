@@ -2010,21 +2010,6 @@ def render_elements_chart(elements_module: dict):
     st.altair_chart(bars + labels, width='stretch')
 
 
-def daewoon_dataframe(dw: dict, current_age: int | None) -> pd.DataFrame:
-    rows = []
-    for item in dw["list"]:
-        current = current_age is not None and item["startAge"] <= current_age < item["startAge"] + 10
-        rows.append({
-            "현재": "▶" if current else "",
-            "나이": f"{item['startAge']}세~",
-            "대운": item["full"],
-            "십성": item["sipseong"]["gan"],
-            "12운성": item["twelveFortune"]["name"],
-            "포인트": item["twelveFortune"]["keyword"],
-        })
-    return pd.DataFrame(rows)
-
-
 # ── Gemini 프롬프트 ──────────────────────────────────────────────────────
 
 def format_sazu_context(body: dict) -> str:
@@ -2609,13 +2594,6 @@ if body:
         m4.metric("현재 대운", f"{fpz.get('current', {}).get('age', '-')}세", fpz.get("current", {}).get("pillar", "-"))
         if ss.get("analysis"):
             st.caption(ss["analysis"])
-
-    st.divider()
-    st.subheader("대운(大運)")
-    dw = modules["decadeFortune"]
-    st.caption(f"{dw['direction']} · {dw['startAge']}세부터 시작 · 기준 절기: {dw.get('basisTermsName', '-')}")
-    cur_age = modules.get("summary", {}).get("fortunePhase", {}).get("current", {}).get("age")
-    st.dataframe(daewoon_dataframe(dw, cur_age), width='stretch', hide_index=True)
 
     tier = body["meta"].get("tier")
     if tier == "free":
