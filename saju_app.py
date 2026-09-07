@@ -487,6 +487,22 @@ def compute_twelve_stages(fp: dict) -> dict:
     return result
 
 
+def render_twelve_stages_detail(fp: dict):
+    """12운성을 각 지지의 SAZU 해석(키워드)과 함께 표시. 해석 데이터가 없으면 단계만 표시."""
+    stages = compute_twelve_stages(fp)
+    labels = [("year", "연지"), ("month", "월지"), ("day", "일지"), ("hour", "시지")]
+    lines = []
+    for key, label in labels:
+        if label not in stages:
+            continue
+        tfi = (fp.get(key) or {}).get("twelveFortuneInterpretation") or {}
+        line = f"  {label}: {stages[label]}"
+        if tfi.get("keyword"):
+            line += f" ({tfi['keyword']})"
+        lines.append(line)
+    st.text("\n".join(lines))
+
+
 # ── 신살 확장 8종 — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ──────────
 # 학파 간 이견이 큰 귀문관살·현침살·홍염살은 제외. 표가 명확히 검증되는 것만 포함.
 
@@ -1698,6 +1714,10 @@ def show_sinsal_dialog(fp: dict, body: dict | None = None):
     try:
         st.markdown("**사주팔자 원국**")
         render_saju_dashboard_table(fp)
+
+        st.divider()
+        st.markdown("**12운성**")
+        render_twelve_stages_detail(fp)
 
         st.divider()
         st.markdown("**납음오행**")
