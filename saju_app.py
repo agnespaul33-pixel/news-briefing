@@ -46,9 +46,10 @@ def show_friendly_error(customer_message: str, exc: Exception | str | None = Non
 SAZU_API_KEY = _secret("SAZU_API_KEY")
 GEMINI_API_KEY = _secret("SAJU_GEMINI_API_KEY")
 # 주의: gemini-1.5-flash, gemini-2.5-flash-lite는 이미 이 계정에서 사용 불가(404).
-# gemini-2.5-flash는 2026-10-16 이후 종료 예정(Google 공식, 확정일은 6개월 전 재공지) —
-# 그때는 GEMINI_MODEL 환경변수로 gemini-3.6-flash 등으로 전환.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# gemini-2.5-flash는 2026-10-16 이후 종료 예정이라 gemini-3.6-flash로 전환(2026-09-04
+# 확인). gemini-3.x 계열은 thinking_budget=0을 거부하니 call_gemini_stream의
+# thinking_budget=1 설정을 건드리지 말 것 — 모델을 또 바꿀 땐 그 값부터 재검증.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 _missing = [n for n, v in (("SAZU_API_KEY", SAZU_API_KEY), ("SAJU_GEMINI_API_KEY", GEMINI_API_KEY)) if not v]
 if _missing:
@@ -71,6 +72,7 @@ ELEMENT_ORDER = ["wood", "fire", "earth", "metal", "water"]
 ELEMENT_KR = {"wood": "목", "fire": "화", "earth": "토", "metal": "금", "water": "수"}
 ELEMENT_COLOR = {"목": "#008300", "화": "#e34948", "토": "#eda100", "금": "#2a78d6", "수": "#4a3aa7"}
 PILLAR_LABELS = [("hour", "시주(時)"), ("day", "일주(日)"), ("month", "월주(月)"), ("year", "연주(年)")]
+PILLAR_KR_BARE = {"year": "연", "month": "월", "day": "일", "hour": "시"}
 # STEM_ELEMENT/BRANCH_ELEMENT(아래 정의)는 오행을 한자(木火土金水)로 반환하는데,
 # elem_count 등 집계용 딕셔너리는 한글 키(목화토금수)를 쓰므로 여기서 변환한다.
 HANJA_ELEMENT_TO_KR = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
@@ -1076,7 +1078,6 @@ def compute_daewoon(fp: dict, civil_birth_dt, gender: str, longitude: float = 12
         return {}
     step = 1 if forward else -1
 
-    PILLAR_KR_BARE = {"year": "연", "month": "월", "day": "일", "hour": "시"}
     periods = []
     for i in range(1, num_periods + 1):
         ganji = _ganji_at(month_idx + step * i)
@@ -1232,7 +1233,6 @@ def compute_sewoon_analysis(fp: dict, year: int) -> dict:
     yy = STEM_YINYANG.get(jg_stem) if jg_stem else BRANCH_YINYANG.get(sw_branch)
     branch_sipseong = sipseong_of(day_stem, elem, yy) or "?"
 
-    pillar_kr_bare = {"year": "연", "month": "월", "day": "일", "hour": "시"}
     interactions = {name: [] for name in ("천간합", "육합", "충", "형", "파", "해")}
     for key in ("year", "month", "day", "hour"):
         p = fp.get(key)
@@ -1240,7 +1240,7 @@ def compute_sewoon_analysis(fp: dict, year: int) -> dict:
             continue
         s = _extract_char(p.get("skyFull"), STEM_CHARS)
         b = _extract_char(p.get("earthFull"), BRANCH_CHARS)
-        _accumulate_ganji_interaction(interactions, pillar_kr_bare[key], s, b, sw_stem, sw_branch)
+        _accumulate_ganji_interaction(interactions, PILLAR_KR_BARE[key], s, b, sw_stem, sw_branch)
 
     return {
         "간지": ganji, "천간십성": stem_sipseong, "지지십성": branch_sipseong,
@@ -2073,10 +2073,21 @@ def format_sazu_context(body: dict) -> str:
         lines.append(f"[신강신약(API 판정)] {ss.get('strength')} (점수 {ss.get('score')}) — {ss.get('analysis')}")
         lines.append(f"  득령={ss.get('deukryeong')} 득지={ss.get('deukji')} 득세={ss.get('deukse')}")
 
-    lines.append("\n[대운표]")
+    lines.append("\n[대운표 — 전 생애 전체, 재물운·인연 시기 판단 시 반드시 처음부터 끝까지 훑어볼 것]")
+    day_stem_for_daewoon = _extract_char((fp.get("day") or {}).get("skyFull"), STEM_CHARS)
     for d in modules["decadeFortune"]["list"]:
-        lines.append(f"  {d['startAge']}세~ {d['full']} 십성={d['sipseong']['gan']}({d['sipseong']['ganCategory']}) "
-                     f"12운성={d['twelveFortune']['name']}")
+        # d["full"]은 SAZU가 한글로 주는 간지 문자열(예: "경진") — 조견표 조회는
+        # 한자 기준이라 두 번째 글자(지지)를 한자로 역변환해서 넘긴다.
+        dw_branch_hangul = d["full"][1] if len(d["full"]) > 1 else None
+        dw_branch = BRANCH_HANGUL_TO_HANJA.get(dw_branch_hangul, dw_branch_hangul) if dw_branch_hangul else None
+        branch_sipseong = "?"
+        if day_stem_for_daewoon and dw_branch:
+            jg_stem = BRANCH_JEONGGI_STEM.get(dw_branch)
+            elem = STEM_ELEMENT.get(jg_stem) if jg_stem else BRANCH_ELEMENT.get(dw_branch)
+            yy = STEM_YINYANG.get(jg_stem) if jg_stem else BRANCH_YINYANG.get(dw_branch)
+            branch_sipseong = sipseong_of(day_stem_for_daewoon, elem, yy) or "?"
+        lines.append(f"  {d['startAge']}세~ {d['full']} 천간십성={d['sipseong']['gan']}({d['sipseong']['ganCategory']}) "
+                     f"지지십성={branch_sipseong} 12운성={d['twelveFortune']['name']}")
     lines.append(f"  방향: {modules['decadeFortune']['direction']} / 시작연령 {modules['decadeFortune']['startAge']}세")
 
     lines.append("\n[신살 — 결정적 계산 결과 (기본 4종: 역마·도화·화개는 연지+일지 기준 / 천을귀인은 일간 기준)]")
@@ -2126,7 +2137,7 @@ def make_prompt(body: dict, gender_label: str) -> str:
 
     return f"""당신은 사주첩경(四柱捷徑)의 저자 이석영 선생과 자평진전(子平眞詮)에 정통한 명리학자입니다.
 아래 【 SAZU 계산 결과 】는 절대 바뀌지 않는 사실입니다. 재계산 없이 그대로 인용하십시오. 특히 십성·12운성·납음·지장간·신살·형충파해·세운은 실제 만세력 앱과 대조해 검증한 자체 계산 결과이니 반드시 그대로 신뢰하고, 절대 스스로 재계산하거나 다른 값으로 바꾸지 마십시오.
-이 사실들을 **어떻게 해석하고 풀어내는지는 당신의 사주첩경·자평진전 지식을 자유롭고 깊이 있게 활용**하십시오. 【 판단 기준 자료 】가 있으면 그 관점을 일반 명리 지식보다 우선해서 반영하되(실제 원문을 그대로 인용하는 것처럼 지어내지 말고 판단 기준으로만 활용), **그 자료가 없거나 얕은 부분이라고 해서 해석을 얕게 하거나 포기하지 마십시오** — 그런 부분은 당신 자신의 폭넓은 명리학 지식으로 채워 넣어, 어느 항목이든 사주첩경 대가가 직접 풀이하는 것처럼 깊이 있게 쓰십시오.
+이 사실들을 **어떻게 해석하고 풀어내는지는 당신의 사주첩경·자평진전 지식을 자유롭고 깊이 있게 활용**하십시오. 【 판단 기준 자료 】가 있으면 그 관점을 일반 명리 지식보다 우선해서 반영하되(실제 원문을 그대로 인용하는 것처럼 지어내지 말고 판단 기준으로만 활용), **그 자료가 없거나 얕은 부분이라고 해서 해석을 얕게 하거나 포기하지 마십시오** — 격국을 명명하는 방식, 신살을 풀이하는 관점, 여러 요소를 하나의 인물상으로 엮는 논리 등은 아래 자료에 없어도 당신 자신의 폭넓은 명리학 지식으로 보완해, 어느 항목이든 사주첩경 대가가 직접 풀이하는 것처럼 깊이 있게 쓰십시오.
 
 ═══════════════════════════════════════
 【 SAZU 계산 결과 】
@@ -2212,8 +2223,13 @@ def call_gemini_stream(prompt: str, max_retries: int = 2):
             return
         except Exception as e:
             msg = str(e)
-            is_transient = ("503" in msg or "UNAVAILABLE" in msg or "timed out" in msg.lower()
-                             or "429" in msg or "RESOURCE_EXHAUSTED" in msg)
+            # 하루 한도(PerDay) 초과는 몇 초 기다려도 절대 안 풀리므로 재시도하면 시간만 낭비함 —
+            # 이런 경우는 즉시 실패시켜서 사용자가 바로 원인(하루 한도 초과)을 알게 한다.
+            is_daily_quota = "PerDay" in msg or "generate_content_free_tier_requests" in msg
+            is_transient = (not is_daily_quota) and (
+                "503" in msg or "UNAVAILABLE" in msg or "timed out" in msg.lower()
+                or "429" in msg or "RESOURCE_EXHAUSTED" in msg
+            )
             if is_transient and not first_chunk_yielded and attempt < max_retries:
                 attempt += 1
                 time.sleep(1.5 * attempt)  # 1.5초, 3초로 점점 늘려가며 대기 후 재시도
@@ -2609,11 +2625,19 @@ if body:
         try:
             full_text = st.write_stream(call_gemini_stream(prompt))
         except Exception as e:
-            show_friendly_error(
-                "AI 해석 생성 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요."
-                " 계속 반복되면 문의해주세요.",
-                e,
-            )
+            _msg = str(e)
+            if "PerDay" in _msg or "generate_content_free_tier_requests" in _msg:
+                show_friendly_error(
+                    "오늘 사용 가능한 AI 해석 횟수를 모두 사용했습니다. 내일 다시 이용해주시거나,"
+                    " 계속 이용하시려면 결제 등록을 안내받으세요.",
+                    e,
+                )
+            else:
+                show_friendly_error(
+                    "AI 해석 생성 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요."
+                    " 계속 반복되면 문의해주세요.",
+                    e,
+                )
         else:
             st.session_state["interpretation"] = full_text
             st.rerun()  # 스트리밍 종료 후 요약/전체 토글이 있는 정리된 화면으로 전환
