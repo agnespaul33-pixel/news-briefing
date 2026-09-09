@@ -984,6 +984,19 @@ def correct_birth_datetime(civil_dt, longitude: float = 126.978, use_solar_time:
     return dt, applied
 
 
+def compute_ages(birth_year: int, birth_month: int, birth_day: int, today: "datetime | None" = None) -> tuple[int, int]:
+    """생년월일로 만 나이와 한국나이(세는나이)를 계산.
+
+    입력이 음력이어도 SAZU 응답의 input 필드를 그대로 쓰는 기존 관례(세운 스트립 등)를
+    따라 음력 월/일을 양력인 것처럼 계산한다 — 드물게 ±1세 오차가 날 수 있음.
+    반환: (만_나이, 한국_나이)
+    """
+    today = today or datetime.now()
+    man_age = today.year - birth_year - ((today.month, today.day) < (birth_month, birth_day))
+    se_age = today.year - birth_year + 1
+    return man_age, se_age
+
+
 # ── 대운(大運) — 아직 프롬프트/화면에 미연결 (쉐도우 모드, 검증 전용) ────────────
 # 다른 모듈과 달리 순수 조견표만으로는 계산이 불가능합니다. 대운수(시작 나이)는
 # 생시부터 가장 가까운 절기(節)까지의 정확한 일수(분 단위)가 필요해서, 매년 날짜가
@@ -2524,6 +2537,10 @@ if body:
     _cal = "음력" if inp.get("isLunar") else "양력"
     _leap_note = " 🔸윤달" if inp.get("isLunar") and inp.get("isLeapMonth") else ""
     _time_note = f"{inp['birthHour']:02d}:{inp.get('birthMinute', 0):02d}" if inp.get("birthHour") is not None else "시간미상"
+    _person_name = st.session_state["current_input"].get("name", "")
+    _man_age, _se_age = compute_ages(inp["birthYear"], inp["birthMonth"], inp["birthDay"])
+    _name_age_label = f"**{_person_name}** (만 {_man_age}세 · 한국나이 {_se_age}세)" if _person_name else f"만 {_man_age}세 · 한국나이 {_se_age}세"
+    st.markdown(_name_age_label)
     st.info(
         f"**입력 확인**: {inp['birthYear']}년 {inp['birthMonth']}월 {inp['birthDay']}일"
         f" ({_cal}{_leap_note}) {_time_note} · {'여성' if inp['isFemale'] else '남성'}"
