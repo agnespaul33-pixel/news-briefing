@@ -46,10 +46,13 @@ def show_friendly_error(customer_message: str, exc: Exception | str | None = Non
 SAZU_API_KEY = _secret("SAZU_API_KEY")
 GEMINI_API_KEY = _secret("SAJU_GEMINI_API_KEY")
 # 주의: gemini-1.5-flash, gemini-2.5-flash-lite는 이미 이 계정에서 사용 불가(404).
-# gemini-2.5-flash는 2026-10-16 이후 종료 예정이라 gemini-3.6-flash로 전환(2026-09-04
+# gemini-2.5-flash는 2026-10-16 이후 종료 예정. gemini-3.6-flash는 2026-09-11 기준
+# (1) 구글 서버 과부하로 503 UNAVAILABLE을 자주 반환하고 (2) 무료 티어 일일 한도가
+# 모델당 20회뿐(RESOURCE_EXHAUSTED, quotaId=GenerateRequestsPerDayPerProjectPerModel-
+# FreeTier, quotaValue=20)이라 금방 막힘 — gemini-3.5-flash로 전환(같은 키로 정상
 # 확인). gemini-3.x 계열은 thinking_budget=0을 거부하니 call_gemini_stream의
 # thinking_budget=1 설정을 건드리지 말 것 — 모델을 또 바꿀 땐 그 값부터 재검증.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 
 _missing = [n for n, v in (("SAZU_API_KEY", SAZU_API_KEY), ("SAJU_GEMINI_API_KEY", GEMINI_API_KEY)) if not v]
 if _missing:
